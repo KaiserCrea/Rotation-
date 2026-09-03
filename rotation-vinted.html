@@ -399,7 +399,7 @@ let settings = {
 let report = {invested:0, recovered:0};
 let lastBackup = 0;
 let dayExtra = 0;
-const openYears = new Set([String(new Date().getFullYear())]);
+const openYears = new Set();
 const lot = new Set();
 let themeFilter = null;
 
@@ -671,10 +671,25 @@ function tagsFor(b){
   return out;
 }
 const ETATS = ["", "Neuf", "Très bon état", "Bon état", "Satisfaisant"];
+/* L'état vient de l'export Vinted (champ "condition"). On ramène ses libellés
+   à l'échelle ci-dessus ; toute valeur inattendue est conservée telle quelle. */
+function etatOf(b){ return b.condition || b.state || ""; }
+function etatNorm(v){
+  const s = String(v || "").trim();
+  if(!s) return "";
+  const l = s.toLowerCase();
+  if(l.startsWith("neuf")) return "Neuf";
+  if(l.startsWith("très bon") || l.startsWith("tres bon")) return "Très bon état";
+  if(l.startsWith("bon ")   || l === "bon")   return "Bon état";
+  if(l.startsWith("satisfaisant")) return "Satisfaisant";
+  return s;
+}
 function etatSelectHTML(v){
+  const cur = etatNorm(v), list = ETATS.slice();
+  if(cur && list.indexOf(cur) === -1) list.push(cur);
   return '<div class="field"><label class="f" for="fState">État du livre</label>' +
-    '<select id="fState">' + ETATS.map(e =>
-      '<option value="' + esc(e) + '"' + ((v || "") === e ? " selected" : "") + '>' +
+    '<select id="fState">' + list.map(e =>
+      '<option value="' + esc(e) + '"' + (cur === e ? " selected" : "") + '>' +
       esc(e || "— non renseigné —") + '</option>').join("") + '</select></div>';
 }
 function descFor(b){
@@ -1141,7 +1156,7 @@ function openManage(id){
   const b = books.find(x => x.id === id);
   if(!b) return;
   $("#sheetTick").textContent = (b.rotations || 0) + " rotations · " + fmtDate(b.lastPublished) +
-    (b.state ? " · " + b.state : "");
+    (etatOf(b) ? " · " + etatNorm(etatOf(b)) : "");
   $("#sheetBody").innerHTML =
     '<h2 class="title" style="font-size:22px; margin-bottom:14px">' + esc(b.title) + '</h2>' +
 
@@ -1168,7 +1183,7 @@ function openManage(id){
           Array.from(new Set(books.map(x => x.theme).filter(Boolean)))
             .map(t => '<option value="' + esc(t) + '">').join("") +
         '</datalist></div>' +
-      etatSelectHTML(b.state) +
+      etatSelectHTML(etatOf(b)) +
       '<div class="field"><label class="f">Mots-clés propres à ce livre</label>' +
         '<div id="kwHost">' + kwPickerHTML(b.tags || []) + '</div></div>' +
       '<button class="btn block" id="mSave2" style="margin-top:12px">Enregistrer</button>' +
@@ -1208,7 +1223,7 @@ function openManage(id){
     const kh = $("#kwHost");
     if(kh) b.tags = kwSelected(kh);
     const st = $("#fState");
-    if(st) b.state = st.value;
+    if(st){ b.condition = st.value; delete b.state; }
     await dbPut("books", b);
   }
   $("#mSave").onclick  = async () => { await saveFields(); toast("Enregistré"); render(); };
