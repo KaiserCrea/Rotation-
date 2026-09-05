@@ -56,7 +56,8 @@ section.on{display:block}
 .btn.ok{color:var(--green); border-color:#3E4C39}
 .btn.wait{color:var(--brass); border-color:#5A4C22}
 .btn.mute{color:var(--muted); border-color:var(--line)}
-.etatLine{margin:0 0 12px; font-size:15px; color:var(--brass); font-family:var(--serif)}
+.achatLine{margin:-8px 0 12px; font-size:14px; color:var(--muted)}
+.etatLine{margin:0 0 4px; font-size:15px; color:var(--brass); font-family:var(--serif)}
 .phGrid{display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 10px}
 .ph{position:relative; width:68px; height:68px; border-radius:8px; overflow:hidden;
     border:1px solid var(--line); background:var(--surface2)}
@@ -177,10 +178,7 @@ progress{width:100%; height:8px}
       <h2 style="font-size:15px; font-weight:500; color:var(--muted)" id="dayLabel"></h2>
     </div>
     <div id="dayList"></div>
-    <div class="row" id="moreRow" style="margin-bottom:22px; gap:8px">
-      <button class="btn block ghost grow" id="moreBtn">Ajouter un livre à aujourd'hui</button>
-      <button class="btn mute" id="lessBtn" style="display:none" aria-label="Annuler le dernier ajout">✕</button>
-    </div>
+    <button class="btn block ghost" id="moreBtn" style="margin-bottom:22px">Ajouter un livre à aujourd'hui</button>
   </div>
 </section>
 
@@ -325,6 +323,12 @@ progress{width:100%; height:8px}
     <button class="btn block" id="saveRep" style="margin-top:12px">Enregistrer le report</button>
   </div>
 
+  <div class="card" id="cahierCard">
+    <h2 style="font-size:16px">Cahier 2023-2024</h2>
+    <p class="hint" style="margin:6px 0 12px" id="cahierTxt"></p>
+    <button class="btn block" id="cahierGo">Importer le cahier</button>
+  </div>
+
   <div class="card" id="histCard">
     <h2 style="font-size:16px">Historique 2026</h2>
     <p class="hint" style="margin:6px 0 12px" id="histTxt">
@@ -430,10 +434,10 @@ let settings = {
   lbcTags:["#spirituel","#spiritualité","#ésotérisme","#ésotérique","#developpement"],
   defaultIsbn:"9782951245020", perDay:6, maxPx:1400, customKw:[],
   msgs:[
-    {t:"Offre",
-     v:"Bonjour, ce livre se vend habituellement {prix}. Mon prix est donc déjà parmi les plus bas du marché, et je ne peux pas aller jusqu'à votre proposition. Je vous fais toutefois cette offre, en espérant qu'elle vous convienne."},
     {t:"Remerciement",
-     v:"{salut} et merci pour votre achat 🙂\n\nVotre colis partira sous 48 h et sera bien protégé.\n\nJe vous souhaite {voeu} {emoji}"}
+     v:"{salut} et merci pour votre achat 🙂\nVotre colis partira sous 48 h et sera bien protégé.\nJe vous souhaite {voeu} {emoji}"},
+    {t:"Offre",
+     v:"Bonjour, ce livre se vend habituellement {prix}. Mon prix est donc déjà parmi les plus bas du marché, et je ne peux pas aller jusqu'à votre proposition. Je vous fais toutefois cette offre, en espérant qu'elle vous convienne."}
   ]
 };
 let report = {invested:0, recovered:0};
@@ -859,7 +863,10 @@ function renderBilan(){
       box.style.padding = "2px 0 10px 14px";
 
       const now = new Date();
-      const nMois = (Number(k) === now.getFullYear()) ? now.getMonth() + 1 : 12;
+      const mois = Object.keys(m).filter(x => x.slice(0,4) === k).sort();
+      const premier = mois.length ? Number(mois[0].slice(5)) : 1;
+      const dernier = (Number(k) === now.getFullYear()) ? now.getMonth() + 1 : 12;
+      const nMois = Math.max(1, dernier - premier + 1);
       const moy = document.createElement("p");
       moy.className = "hint";
       moy.style.margin = "4px 0 6px";
@@ -890,7 +897,7 @@ function renderBilan(){
   ael.className = "big " + (tr >= 0 ? "pos" : "neg");
   $("#bAllIn").textContent = eur(tin);
   $("#bAllOut").textContent = eur(tout);
-  $("#bReportNote").textContent = "Depuis décembre 2022.";
+  $("#bReportNote").textContent = cahierDone ? "Depuis mars 2023." : "Depuis décembre 2022.";
 }
 
 /* =====================================================================
@@ -904,8 +911,6 @@ function render(){
 }
 function renderDay(){
   const list = todayList(), left = slotsLeft(), done = publishedToday();
-  const lb = $("#lessBtn");
-  if(lb) lb.style.display = dayExtra > 0 ? "" : "none";
   $("#dayLabel").textContent = left
     ? left + (left > 1 ? " livres à publier aujourd'hui" : " livre à publier aujourd'hui")
     : "Journée terminée — " + done + " publiés";
@@ -1156,8 +1161,10 @@ function toggle(btn, box, labelOpen, labelShut){
   };
 }
 let sheetScrollY = 0;
+let sheetFromCat = false;
 function openSheet(){
   sheetScrollY = window.scrollY || window.pageYOffset || 0;
+  sheetFromCat = !!($("#cat") && $("#cat").classList.contains("on"));
   $("#sheet").classList.add("on");
   document.body.style.overflow = "hidden";
   window.scrollTo(0,0);
@@ -1193,6 +1200,7 @@ function openBook(id){
       (etatNorm(etatOf(b))
         ? '<p class="etatLine">' + esc(etatNorm(etatOf(b))) + '</p>'
         : '') +
+      '<p class="achatLine">acheté ' + eur(b.buyPrice || 0) + '</p>' +
       '<div class="field" style="margin:0"><label class="f" for="fPrice">Prix désiré</label>' +
         '<div class="row"><input id="fPrice" inputmode="decimal" value="' + esc(b.price) + '" class="grow">' +
         '<button class="btn" data-copyval="fPrice">Copier</button></div></div>' +
@@ -1403,7 +1411,7 @@ function closeSheet(){
   $("#sheet").classList.remove("on");
   document.body.style.overflow = "";
   render();
-  const y = sheetScrollY;
+  const y = sheetFromCat ? sheetScrollY : 0;
   requestAnimationFrame(() => window.scrollTo(0, y));
 }
 
@@ -1645,6 +1653,17 @@ const HIST_2026 = [
   ["2026-04", 522, 1731],["2026-05", 186, 861],  ["2026-06", 10, 557],
   ["2026-07", 89, 755],  ["2026-08", 247, 700]
 ];
+const HIST_CAHIER = [
+  ["2023-03", 1919, 1475], ["2023-04",  658,  690], ["2023-05",  526, 1722],
+  ["2023-06",  518,  852], ["2023-07",  485, 1227], ["2023-08",    0,  230],
+  ["2023-09",   33,  584], ["2023-10",  255,  669], ["2023-11",  437,  995],
+  ["2023-12",  643,  936],
+  ["2024-01", 1131, 2336], ["2024-02", 1689, 1805], ["2024-03",  163, 1951],
+  ["2024-04",  345,  768], ["2024-05",  221, 1121], ["2024-06",  284,  838],
+  ["2024-07",  272,  762], ["2024-08",   20,  770], ["2024-09",  207,  759],
+  ["2024-10",   96,    0], ["2024-11",  148,  495], ["2024-12",  101,  410]
+];
+let cahierDone = false;
 let histDone = false;
 function histStamp(k){
   const [y,m] = k.split("-").map(Number);
@@ -1667,7 +1686,49 @@ async function importHist(){
   fillSettings(); render();
   toast("Historique 2026 importé");
 }
+async function importCahier(){
+  if(cahierDone){ toast("Le cahier 2023-2024 est déjà importé."); return; }
+
+  const ti = HIST_CAHIER.reduce((s,r) => s + r[1], 0);
+  const tr = HIST_CAHIER.reduce((s,r) => s + r[2], 0);
+  if(!confirm(
+      "Importer mars 2023 à décembre 2024 ?\n\n" +
+      HIST_CAHIER.length + " mois\n" +
+      eur(ti) + " investis\n" + eur(tr) + " récupérés\n\n" +
+      "Le report initial sera remis à zéro : ces montants le remplacent."
+  )) return;
+
+  const ps = [], ss = [];
+  HIST_CAHIER.forEach(row => {
+    const t = histStamp(row[0]);
+    if(row[1]) ps.push({id:"c" + row[0] + "p", date:t, amount:row[1], count:0, label:"cahier " + row[0]});
+    if(row[2]) ss.push({id:"c" + row[0] + "s", date:t, amount:row[2], count:0, title:"cahier " + row[0], buyPrice:0, desired:0});
+  });
+  if(ps.length) await dbPutMany("purchases", ps);
+  if(ss.length) await dbPutMany("sales", ss);
+  purchases = purchases.concat(ps);
+  sales = sales.concat(ss);
+
+  report = {invested:0, recovered:0};
+  await dbPut("meta", {k:"report", v:report});
+
+  cahierDone = true;
+  await dbPut("meta", {k:"cahier2324", v:true});
+  fillSettings(); render();
+  toast("Cahier 2023-2024 importé — report remis à zéro");
+}
+function fillCahier(){
+  const b = $("#cahierGo");
+  if(!b) return;
+  b.disabled = cahierDone;
+  const ti = HIST_CAHIER.reduce((s,r) => s + r[1], 0);
+  const tr = HIST_CAHIER.reduce((s,r) => s + r[2], 0);
+  $("#cahierTxt").textContent = cahierDone
+    ? "Mars 2023 à décembre 2024 sont dans le bilan : " + eur(ti) + " investis, " + eur(tr) + " récupérés. Le report initial est à zéro."
+    : "Ajoute mars 2023 à décembre 2024 au bilan, d'après le cahier papier : " + eur(ti) + " investis, " + eur(tr) + " récupérés. Le report initial sera remis à zéro.";
+}
 function fillHist(){
+  fillCahier();
   const c = $("#histCard");
   if(!c) return;
   $("#histGo").disabled = histDone;
@@ -1837,7 +1898,7 @@ document.addEventListener("click", async (e) => {
   const sk = e.target.closest("[data-skip]");
   if(sk){
     await skipToday(sk.dataset.skip);
-    if(publishedToday() >= (settings.perDay || 6) && dayExtra > 0) dayExtra--;
+    if(dayExtra > 0) dayExtra--;
     renderDay();
     toast("Écarté pour aujourd'hui — il revient demain");
     return;
@@ -1906,7 +1967,6 @@ $("#addBtn").onclick = openAdd;
 $("#addLotBtn").onclick = openAddLot;
 $("#search").oninput = renderCat;
 $("#moreBtn").onclick = () => { dayExtra++; renderDay(); };
-$("#lessBtn").onclick = () => { if(dayExtra > 0) dayExtra--; renderDay(); };
 
 $("#lotClear").onclick = () => { lot.clear(); renderCat(); };
 $("#lotGo").onclick = async () => {
@@ -1983,6 +2043,7 @@ $("#saveRep").onclick = async () => {
   renderBilan();
   toast("Report enregistré");
 };
+$("#cahierGo").onclick = () => importCahier();
 $("#histGo").onclick = () => {
   if(!confirm("Ajouter janvier à août 2026 au bilan ?")) return;
   importHist();
@@ -2030,9 +2091,17 @@ $("#wipe").onclick = async () => {
         m.v = m.v.replace("habituellement entre {prix}", "habituellement {prix}");
         corrige = true;
       }
+      if(m.v && m.v.indexOf("\n\n") >= 0){
+        m.v = m.v.replace(/\n\n+/g, "\n");
+        corrige = true;
+      }
     });
+    const iRem = settings.msgs.findIndex(m => /merci pour votre achat/i.test(m.v || ""));
+    if(iRem > 0){ settings.msgs.unshift(settings.msgs.splice(iRem, 1)[0]); corrige = true; }
     if(corrige) await dbPut("meta", {k:"settings", v:settings});
   }
+  const ch = await dbGet("meta","cahier2324");
+  if(ch && ch.v) cahierDone = true;
   const dl = await dbGet("meta","daily");
   if(dl && dl.v) daily = dl.v;
   const hh = await dbGet("meta","hist2026");
