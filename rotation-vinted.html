@@ -675,20 +675,33 @@ function queue(){
     return (a.lastPublished || a.createdAt || 0) - (b.lastPublished || b.createdAt || 0);
   });
 }
-let daily = {day:"", n:0};
+let daily = {day:"", n:0, skip:[]};
 function publishedToday(){
   return daily.day === dayKey() ? daily.n : 0;
 }
+function skippedToday(){
+  return (daily.day === dayKey() && Array.isArray(daily.skip)) ? daily.skip : [];
+}
+async function skipToday(id){
+  const k = dayKey();
+  if(daily.day !== k) daily = {day:k, n:0, skip:[]};
+  if(!Array.isArray(daily.skip)) daily.skip = [];
+  if(daily.skip.indexOf(id) < 0) daily.skip.push(id);
+  await dbPut("meta", {k:"daily", v:daily});
+}
 async function countPublish(){
   const k = dayKey();
-  if(daily.day !== k) daily = {day:k, n:0};
+  if(daily.day !== k) daily = {day:k, n:0, skip:[]};
   daily.n++;
   await dbPut("meta", {k:"daily", v:daily});
 }
 function slotsLeft(){
   return Math.max(0, (settings.perDay || 6) + dayExtra - publishedToday());
 }
-function todayList(){ return queue().slice(0, slotsLeft()); }
+function todayList(){
+  const hors = skippedToday();
+  return queue().filter(b => hors.indexOf(b.id) < 0).slice(0, slotsLeft());
+}
 
 /* =====================================================================
    Texte d'annonce
@@ -909,8 +922,10 @@ function renderDay(){
         ' · ' + (isFinite(wait) ? 'en ligne depuis ' + wait + ' j' : 'jamais publié') +
         (b.rotations ? ' · <span class="tick">' + b.rotations + ' rotations</span>' : '') +
       '</div>' +
-      '<div class="row" style="margin-top:12px">' +
+      '<div class="row" style="margin-top:12px; gap:8px">' +
         '<button class="btn main grow" data-open="' + esc(b.id) + '">Préparer</button>' +
+        '<button class="btn mute" data-skip="' + esc(b.id) + '" ' +
+          'aria-label="Écarter ce livre pour aujourd\'hui">✕</button>' +
       '</div>';
     host.appendChild(el);
   });
@@ -1819,6 +1834,14 @@ const TABS = ["today", "cat", "cours", "bilan"];
 })();
 
 document.addEventListener("click", async (e) => {
+  const sk = e.target.closest("[data-skip]");
+  if(sk){
+    await skipToday(sk.dataset.skip);
+    if(publishedToday() >= (settings.perDay || 6) && dayExtra > 0) dayExtra--;
+    renderDay();
+    toast("Écarté pour aujourd'hui — il revient demain");
+    return;
+  }
   const open = e.target.closest("[data-open]");
   if(open){ openBook(open.dataset.open); return; }
 
