@@ -56,6 +56,13 @@ section.on{display:block}
 .btn.ok{color:var(--green); border-color:#3E4C39}
 .btn.wait{color:var(--brass); border-color:#5A4C22}
 .btn.mute{color:var(--muted); border-color:var(--line)}
+.phGrid{display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 10px}
+.ph{position:relative; width:68px; height:68px; border-radius:8px; overflow:hidden;
+    border:1px solid var(--line); background:var(--surface2)}
+.ph img{width:100%; height:100%; object-fit:cover; display:block}
+.ph button{position:absolute; top:2px; right:2px; width:22px; height:22px; padding:0;
+    border:0; border-radius:50%; background:rgba(20,24,29,.82); color:#E9E3D6;
+    font-size:13px; line-height:22px; text-align:center; cursor:pointer}
 .btn.sm{padding:7px 11px; font-size:13.5px}
 .btn.block{width:100%; display:block; text-align:center}
 .btn[disabled]{opacity:.45}
@@ -807,6 +814,15 @@ function renderBilan(){
     if(openYears.has(k)){
       const box = document.createElement("div");
       box.style.padding = "2px 0 10px 14px";
+
+      const now = new Date();
+      const nMois = (Number(k) === now.getFullYear()) ? now.getMonth() + 1 : 12;
+      const moy = document.createElement("p");
+      moy.className = "hint";
+      moy.style.margin = "4px 0 6px";
+      moy.innerHTML = "moyenne <span class=\"" + (r >= 0 ? "pos" : "neg") + "\">" +
+        (r >= 0 ? "+" : "") + eur(r / nMois) + "</span> par mois sur " + nMois + " mois";
+      box.appendChild(moy);
       keys.filter(mk => mk.slice(0,4) === k).forEach(mk => {
         const em = m[mk], rm = em.out - em.in;
         const d = document.createElement("div");
@@ -1209,6 +1225,11 @@ function openManage(id){
             .map(t => '<option value="' + esc(t) + '">').join("") +
         '</datalist></div>' +
       etatSelectHTML(etatOf(b)) +
+      '<div class="field"><label class="f">Photos</label>' +
+        '<div id="phHost" class="phGrid"></div>' +
+        '<input type="file" id="phAdd" accept="image/*" multiple>' +
+        '<p class="hint" style="margin-top:6px">Les nouvelles photos se placent à la suite. ' +
+        'La croix en supprime une et renumérote les autres.</p></div>' +
       '<div class="field"><label class="f">Mots-clés propres à ce livre</label>' +
         '<div id="kwHost">' + kwPickerHTML(b.tags || []) + '</div></div>' +
       '<button class="btn block" id="mSave2" style="margin-top:12px">Enregistrer</button>' +
@@ -1229,6 +1250,58 @@ function openManage(id){
   openSheet();
   wireIsbn();
   wireKwPicker($("#kwHost"));
+  let phURLs = [];
+  async function renderPhotos(){
+    const host = $("#phHost");
+    if(!host) return;
+    phURLs.forEach(u => URL.revokeObjectURL(u));
+    phURLs = [];
+    const n = b.photoCount || 0;
+    if(!n){ host.innerHTML = '<span class="hint">Aucune photo.</span>'; return; }
+    let html = "";
+    for(let i = 0; i < n; i++){
+      const rec = await dbGet("photos", b.id + "_" + i);
+      if(!rec) continue;
+      const u = URL.createObjectURL(rec.blob);
+      phURLs.push(u);
+      html += '<div class="ph"><img src="' + u + '" alt="photo ' + (i+1) + '">' +
+        '<button type="button" data-ph="' + i + '" aria-label="Supprimer cette photo">✕</button></div>';
+    }
+    host.innerHTML = html;
+    host.querySelectorAll("[data-ph]").forEach(btn => {
+      btn.onclick = async () => {
+        const i = Number(btn.dataset.ph);
+        if(!confirm("Supprimer cette photo ?")) return;
+        const n = b.photoCount || 0;
+        for(let j = i; j < n - 1; j++){
+          const nx = await dbGet("photos", b.id + "_" + (j + 1));
+          if(nx) await dbPut("photos", {key: b.id + "_" + j, blob: nx.blob});
+        }
+        await dbDel("photos", b.id + "_" + (n - 1));
+        b.photoCount = n - 1;
+        await dbPut("books", b);
+        await renderPhotos();
+        toast("Photo supprimée");
+      };
+    });
+  }
+  renderPhotos();
+  const phIn = $("#phAdd");
+  if(phIn) phIn.onchange = async () => {
+    const files = Array.from(phIn.files || []);
+    if(!files.length) return;
+    let k = b.photoCount || 0;
+    for(const f of files){
+      await dbPut("photos", {key: b.id + "_" + k, blob: await shrink(f, settings.maxPx, 0.9)});
+      k++;
+    }
+    b.photoCount = k;
+    await dbPut("books", b);
+    phIn.value = "";
+    await renderPhotos();
+    toast(files.length + (files.length > 1 ? " photos ajoutées" : " photo ajoutée"));
+  };
+
   toggle($("#editMore"), $("#editMoreBox"), "Masquer", "Modifier la fiche");
 
   async function saveFields(){
@@ -1598,10 +1671,35 @@ function showTab(id, noPush){
   $$("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === id));
   $("#gear").classList.toggle("on", id === "set");
   window.scrollTo(0,0);
+  if(id !== "set"){ try { localStorage.setItem("rot.tab", id); } catch(e){} }
   if(!noPush && id !== "today") pushState();
 }
 $$("nav button").forEach(btn => { btn.onclick = () => showTab(btn.dataset.tab); });
 $("#gear").onclick = () => showTab("set");
+
+/* ---- changement d'onglet par glissement horizontal ---- */
+const TABS = ["today", "cat", "cours", "bilan"];
+(function(){
+  let x0 = 0, y0 = 0, actif = false;
+  document.addEventListener("touchstart", (e) => {
+    if(e.touches.length !== 1 || $("#sheet").classList.contains("on")){ actif = false; return; }
+    if(e.target.closest("input, textarea, select")){ actif = false; return; }
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; actif = true;
+  }, {passive:true});
+  document.addEventListener("touchend", (e) => {
+    if(!actif) return;
+    actif = false;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - x0, dy = t.clientY - y0;
+    if(Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 2) return;
+    const cur = $$("main section").find(s => s.classList.contains("on"));
+    const i = cur ? TABS.indexOf(cur.id) : -1;
+    if(i < 0) return;
+    const j = i + (dx < 0 ? 1 : -1);
+    if(j < 0 || j >= TABS.length) return;
+    showTab(TABS[j]);
+  }, {passive:true});
+})();
 
 document.addEventListener("click", async (e) => {
   const open = e.target.closest("[data-open]");
@@ -1797,6 +1895,10 @@ $("#wipe").onclick = async () => {
     if(!b.status) b.status = "stock";
   });
   fillSettings(); render();
+  try {
+    const t = localStorage.getItem("rot.tab");
+    if(t && t !== "today" && $("#" + t)) showTab(t, true);
+  } catch(e){}
 })();
 
 /* =====================================================================
