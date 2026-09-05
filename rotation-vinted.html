@@ -36,8 +36,8 @@ nav::-webkit-scrollbar{display:none}
 nav button{padding:0 0 10px; font-size:15px; color:var(--muted); white-space:nowrap;
   border-bottom:2px solid transparent; border-radius:0}
 nav button.on{color:var(--text); border-bottom-color:var(--brass)}
-#gear{font-size:20px; line-height:1; color:var(--muted); padding:2px 4px}
-#gear.on{color:var(--brass)}
+#gear, #mailBtn{font-size:20px; line-height:1; color:var(--muted); padding:2px 4px}
+#gear.on, #mailBtn.on{color:var(--brass)}
 main{padding:18px 16px 0; max-width:640px; margin:0 auto}
 section{display:none}
 section.on{display:block}
@@ -124,6 +124,7 @@ progress{width:100%; height:8px}
     <span class="brand">Rotation</span>
     <span class="hdrright">
       <span class="count" id="hdrCount"></span>
+      <button id="mailBtn" aria-label="Messages types">✉</button>
       <button id="gear" aria-label="Réglages">⚙</button>
     </span>
   </div>
@@ -243,6 +244,25 @@ progress{width:100%; height:8px}
 </section>
 
 <!-- ========== RÉGLAGES ========== -->
+<section id="msg">
+  <div class="card">
+    <h2 style="font-size:16px">Messages types</h2>
+    <p class="hint" style="margin:6px 0 12px">
+      Un appui sur Copier reprend le texte, salutation ajustée à l'heure qu'il est.
+    </p>
+    <div class="field" style="margin:0">
+      <label class="f" for="msgPrice">Prix à insérer</label>
+      <input id="msgPrice" inputmode="decimal" placeholder="ex. 45">
+      <p class="hint" style="margin-top:6px">
+        Remplace <b>{prix}</b> dans les messages qui en contiennent un.
+        Les codes <b>{salut}</b>, <b>{voeu}</b> et <b>{emoji}</b> suivent l'heure.
+      </p>
+    </div>
+  </div>
+  <div id="msgList"></div>
+  <button class="btn block" id="msgAdd" style="margin-bottom:22px">Ajouter un message</button>
+</section>
+
 <section id="set">
   <div class="card" id="bkWarn" style="display:none; border-color:#4A3A38">
     <p class="hint" style="color:var(--brick)" id="bkWarnTxt"></p>
@@ -404,7 +424,13 @@ let books = [], sales = [], purchases = [];
 let settings = {
   signature:"", pool:POOL_DEFAULT.slice(), poolTake:12,
   lbcTags:["#spirituel","#spiritualité","#ésotérisme","#ésotérique","#developpement"],
-  defaultIsbn:"9782951245020", perDay:6, maxPx:1400, customKw:[]
+  defaultIsbn:"9782951245020", perDay:6, maxPx:1400, customKw:[],
+  msgs:[
+    {t:"Offre",
+     v:"Bonjour, ce livre se vend habituellement entre {prix}. Mon prix est donc déjà parmi les plus bas du marché, et je ne peux pas aller jusqu'à votre proposition. Je vous fais toutefois cette offre, en espérant qu'elle vous convienne."},
+    {t:"Remerciement",
+     v:"{salut} et merci pour votre achat 🙂\n\nVotre colis partira sous 48 h et sera bien protégé.\n\nJe vous souhaite {voeu} {emoji}"}
+  ]
 };
 let report = {invested:0, recovered:0};
 let lastBackup = 0;
@@ -1632,6 +1658,52 @@ function fillHist(){
 /* =====================================================================
    Réglages
    ===================================================================== */
+function salutations(){
+  const h = new Date().getHours();
+  if(h >= 6 && h < 16)  return {salut:"Bonjour", voeu:"une très bonne journée",        emoji:"🌞"};
+  if(h >= 16 && h < 19) return {salut:"Bonjour", voeu:"une très bonne fin de journée", emoji:"🌞"};
+  if(h >= 19 && h < 22) return {salut:"Bonsoir", voeu:"une très bonne soirée",         emoji:"✨"};
+  return                       {salut:"Bonsoir", voeu:"une très bonne fin de soirée",  emoji:"🌝"};
+}
+function msgFinal(v){
+  const s = salutations();
+  const prix = ($("#msgPrice") && $("#msgPrice").value.trim()) || "{prix}";
+  return String(v || "")
+    .replace(/\{salut\}/g, s.salut)
+    .replace(/\{voeu\}/g,  s.voeu)
+    .replace(/\{emoji\}/g, s.emoji)
+    .replace(/\{prix\}/g,  prix);
+}
+function renderMsgs(){
+  const host = $("#msgList");
+  if(!host) return;
+  const list = settings.msgs || [];
+  host.innerHTML = list.map((m, i) =>
+    '<div class="card">' +
+      '<div class="field" style="margin:0">' +
+        '<input class="msgT" data-i="' + i + '" value="' + esc(m.t || "") + '" placeholder="Nom du message">' +
+        '<textarea class="msgV" data-i="' + i + '" rows="5" style="margin-top:8px">' + esc(m.v || "") + '</textarea>' +
+      '</div>' +
+      '<p class="hint" style="margin:10px 0 0" id="msgPrev' + i + '"></p>' +
+      '<div class="row" style="margin-top:12px; gap:8px">' +
+        '<button class="btn ok grow" data-msgcopy="' + i + '">Copier</button>' +
+        '<button class="btn mute" data-msgdel="' + i + '" aria-label="Supprimer ce message">✕</button>' +
+      '</div>' +
+    '</div>').join("");
+  if(!list.length) host.innerHTML = '<p class="empty">Aucun message enregistré.</p>';
+  list.forEach((m, i) => {
+    const pv = $("#msgPrev" + i);
+    if(pv) pv.textContent = msgFinal(m.v);
+  });
+}
+async function saveMsgs(){
+  settings.msgs = (settings.msgs || []).map((m, i) => {
+    const t = document.querySelector('.msgT[data-i="' + i + '"]');
+    const v = document.querySelector('.msgV[data-i="' + i + '"]');
+    return {t: t ? t.value : m.t, v: v ? v.value : m.v};
+  });
+  await dbPut("meta", {k:"settings", v:settings});
+}
 function fillSettings(){
   fillHist();
   $("#perDay").value = settings.perDay || 6;
@@ -1670,12 +1742,51 @@ function showTab(id, noPush){
   $$("main section").forEach(s => s.classList.toggle("on", s.id === id));
   $$("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === id));
   $("#gear").classList.toggle("on", id === "set");
+  $("#mailBtn").classList.toggle("on", id === "msg");
+  if($("#msgList") && $("#msgList").children.length) saveMsgs();
   window.scrollTo(0,0);
-  if(id !== "set"){ try { localStorage.setItem("rot.tab", id); } catch(e){} }
+  if(id !== "set" && id !== "msg"){ try { localStorage.setItem("rot.tab", id); } catch(e){} }
   if(!noPush && id !== "today") pushState();
 }
 $$("nav button").forEach(btn => { btn.onclick = () => showTab(btn.dataset.tab); });
 $("#gear").onclick = () => showTab("set");
+$("#mailBtn").onclick = () => { renderMsgs(); showTab("msg"); };
+
+document.addEventListener("input", (e) => {
+  if(e.target.id === "msgPrice" || e.target.classList.contains("msgV")){
+    (settings.msgs || []).forEach((m, i) => {
+      const v = document.querySelector('.msgV[data-i="' + i + '"]');
+      const pv = $("#msgPrev" + i);
+      if(pv) pv.textContent = msgFinal(v ? v.value : m.v);
+    });
+  }
+});
+
+document.addEventListener("click", async (e) => {
+  const mc = e.target.closest("[data-msgcopy]");
+  if(mc){
+    await saveMsgs();
+    const v = (settings.msgs[Number(mc.dataset.msgcopy)] || {}).v;
+    copy(msgFinal(v), mc);
+    return;
+  }
+  const md = e.target.closest("[data-msgdel]");
+  if(md){
+    if(!confirm("Supprimer ce message ?")) return;
+    await saveMsgs();
+    settings.msgs.splice(Number(md.dataset.msgdel), 1);
+    await dbPut("meta", {k:"settings", v:settings});
+    renderMsgs();
+    return;
+  }
+  if(e.target.id === "msgAdd"){
+    await saveMsgs();
+    settings.msgs = settings.msgs || [];
+    settings.msgs.push({t:"Nouveau message", v:""});
+    await dbPut("meta", {k:"settings", v:settings});
+    renderMsgs();
+  }
+});
 
 /* ---- changement d'onglet par glissement horizontal ---- */
 const TABS = ["today", "cat", "cours", "bilan"];
