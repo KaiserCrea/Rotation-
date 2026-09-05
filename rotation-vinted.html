@@ -442,7 +442,7 @@ let settings = {
 };
 let report = {invested:0, recovered:0};
 let lastBackup = 0;
-let dayExtra = 0;
+let dayExtra = 0;   // rechargé depuis daily.extra
 const openYears = new Set();
 const lot = new Set();
 let themeFilter = null;
@@ -679,7 +679,7 @@ function queue(){
     return (a.lastPublished || a.createdAt || 0) - (b.lastPublished || b.createdAt || 0);
   });
 }
-let daily = {day:"", n:0, skip:[]};
+let daily = {day:"", n:0, skip:[], extra:0};
 function publishedToday(){
   return daily.day === dayKey() ? daily.n : 0;
 }
@@ -688,14 +688,27 @@ function skippedToday(){
 }
 async function skipToday(id){
   const k = dayKey();
-  if(daily.day !== k) daily = {day:k, n:0, skip:[]};
+  if(daily.day !== k) daily = {day:k, n:0, skip:[], extra:0};
   if(!Array.isArray(daily.skip)) daily.skip = [];
   if(daily.skip.indexOf(id) < 0) daily.skip.push(id);
   await dbPut("meta", {k:"daily", v:daily});
 }
+async function setExtra(n){
+  const k = dayKey();
+  if(daily.day !== k) daily = {day:k, n:0, skip:[], extra:0};
+  dayExtra = Math.max(0, n);
+  daily.extra = dayExtra;
+  await dbPut("meta", {k:"daily", v:daily});
+}
+async function unskipLast(){
+  if(daily.day !== dayKey() || !Array.isArray(daily.skip) || !daily.skip.length) return false;
+  daily.skip.pop();
+  await dbPut("meta", {k:"daily", v:daily});
+  return true;
+}
 async function countPublish(){
   const k = dayKey();
-  if(daily.day !== k) daily = {day:k, n:0, skip:[]};
+  if(daily.day !== k) daily = {day:k, n:0, skip:[], extra:0};
   daily.n++;
   await dbPut("meta", {k:"daily", v:daily});
 }
@@ -1166,6 +1179,7 @@ function openSheet(){
   sheetScrollY = window.scrollY || window.pageYOffset || 0;
   sheetFromCat = !!($("#cat") && $("#cat").classList.contains("on"));
   $("#sheet").classList.add("on");
+  $("#sheet").scrollTop = 0;
   document.body.style.overflow = "hidden";
   window.scrollTo(0,0);
   pushState();
@@ -1898,7 +1912,7 @@ document.addEventListener("click", async (e) => {
   const sk = e.target.closest("[data-skip]");
   if(sk){
     await skipToday(sk.dataset.skip);
-    if(dayExtra > 0) dayExtra--;
+    if(dayExtra > 0) await setExtra(dayExtra - 1);
     renderDay();
     toast("Écarté pour aujourd'hui — il revient demain");
     return;
@@ -1966,7 +1980,11 @@ $("#closeSheet").onclick = closeSheet;
 $("#addBtn").onclick = openAdd;
 $("#addLotBtn").onclick = openAddLot;
 $("#search").oninput = renderCat;
-$("#moreBtn").onclick = () => { dayExtra++; renderDay(); };
+$("#moreBtn").onclick = async () => {
+  if(await unskipLast()){ renderDay(); return; }
+  await setExtra(dayExtra + 1);
+  renderDay();
+};
 
 $("#lotClear").onclick = () => { lot.clear(); renderCat(); };
 $("#lotGo").onclick = async () => {
@@ -1974,7 +1992,7 @@ $("#lotGo").onclick = async () => {
   const changed = [];
   queue().forEach(b => { if(lot.has(b.id)){ b.priority = rank++; changed.push(b); } });
   await dbPutMany("books", changed);
-  lot.clear(); dayExtra = 0;
+  lot.clear(); await setExtra(0);
   toast(changed.length + " livres passés en tête de file");
   render(); showTab("today");
 };
@@ -2104,6 +2122,7 @@ $("#wipe").onclick = async () => {
   if(ch && ch.v) cahierDone = true;
   const dl = await dbGet("meta","daily");
   if(dl && dl.v) daily = dl.v;
+  if(daily.day === dayKey() && daily.extra) dayExtra = daily.extra;
   const hh = await dbGet("meta","hist2026");
   histDone = !!(hh && hh.v);
 
