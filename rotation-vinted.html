@@ -686,8 +686,12 @@ function queue(){
   return inStock().slice().sort((a,b) => {
     if(a.priority !== b.priority) return (b.priority?1:0) - (a.priority?1:0);
     if(a.priority && b.priority) return a.priority - b.priority;
+    const fa = (!a.lastPublished && a.fresh) ? 0 : 1;
+    const fb = (!b.lastPublished && b.fresh) ? 0 : 1;
+    if(fa !== fb) return fa - fb;                     // saisies à la main d'abord
+    if(!fa && !fb) return (a.createdAt || 0) - (b.createdAt || 0);
     const na = a.lastPublished ? 1 : 0, nb = b.lastPublished ? 1 : 0;
-    if(na !== nb) return na - nb;                     // jamais publié d'abord
+    if(na !== nb) return na - nb;                     // puis les jamais publiés
     if(!na && !nb) return (a.createdAt || 0) - (b.createdAt || 0);
     return a.lastPublished - b.lastPublished;
   });
@@ -1588,7 +1592,7 @@ function wireAddForms(n, lotInfo){
         price: num(c.querySelector(".nPrice").value),
         buyPrice: num(c.querySelector(".nBuy").value),
         condition:"", parcel:"",
-        createdAt: Date.now(), lastPublished:0, rotations:0,
+        createdAt: Date.now(), lastPublished:0, rotations:0, fresh:true,
         isbn: isbnNormalise(isbnRaw).value || isbnClean(isbnRaw),
         theme: c.querySelector(".nTheme").value.trim(),
         priority:0, status:"stock", soldPrice:0, soldAt:0, photoCount:k
@@ -2156,6 +2160,12 @@ $("#wipe").onclick = async () => {
     if(b.buyPrice == null) b.buyPrice = 0;
     if(!b.status) b.status = "stock";
   });
+  if(!(await dbGet("meta","freshMark"))){
+    const maj = books.filter(b => !b.lastPublished && !b.parcel && b.fresh === undefined);
+    maj.forEach(b => { b.fresh = true; });
+    if(maj.length) await dbPutMany("books", maj);
+    await dbPut("meta", {k:"freshMark", v:true});
+  }
   fillSettings(); render();
   try {
     const t = localStorage.getItem("rot.tab");
