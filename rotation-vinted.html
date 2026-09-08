@@ -57,6 +57,7 @@ section.on{display:block}
 .btn.wait{color:var(--brass); border-color:#5A4C22}
 .btn.mute{color:var(--muted); border-color:var(--line)}
 .achatLine{margin:-8px 0 12px; font-size:14px; color:var(--muted)}
+.dort{color:var(--brick)}
 .etatLine{margin:0 0 4px; font-size:15px; color:var(--brass); font-family:var(--serif)}
 .phGrid{display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 10px}
 .ph{position:relative; width:68px; height:68px; border-radius:8px; overflow:hidden;
@@ -252,14 +253,9 @@ progress{width:100%; height:8px}
     <p class="hint" style="margin:6px 0 12px">
       Un appui sur Copier reprend le texte, salutation ajustée à l'heure qu'il est.
     </p>
-    <div class="field" style="margin:0">
-      <label class="f" for="msgPrice">Prix du marché</label>
-      <input id="msgPrice" placeholder="ex. entre 50 € et 100 €">
-      <p class="hint" style="margin-top:6px">
-        Remplace <b>{prix}</b> dans les messages qui en contiennent un.
-        Les codes <b>{salut}</b>, <b>{voeu}</b> et <b>{emoji}</b> suivent l'heure.
-      </p>
-    </div>
+    <p class="hint" style="margin:0">
+      Les codes <b>{salut}</b>, <b>{voeu}</b> et <b>{emoji}</b> suivent l'heure.
+    </p>
   </div>
   <div id="msgList"></div>
   <button class="btn block" id="msgAdd" style="margin-bottom:22px">Ajouter un message</button>
@@ -293,6 +289,14 @@ progress{width:100%; height:8px}
         <span id="poolTake">12</span>, plus ceux propres au livre. Les doublons sont écartés.
       </p>
       <button class="btn sm" id="poolReset" style="margin-top:8px">Remettre la liste conseillée</button>
+    </div>
+    <div class="field">
+      <label class="f" for="dormantM">Signaler un livre invendu après (mois)</label>
+      <input id="dormantM" inputmode="numeric">
+      <p class="hint" style="margin-top:6px">
+        Les livres en catalogue depuis plus longtemps sans être partis sont marqués
+        « dort » dans la liste. Mettre 0 pour ne rien signaler.
+      </p>
     </div>
     <div class="field">
       <label class="f" for="lbc">Mots-clés Le Bon Coin</label>
@@ -432,7 +436,7 @@ let books = [], sales = [], purchases = [];
 let settings = {
   signature:"", pool:POOL_DEFAULT.slice(), poolTake:12,
   lbcTags:["#spirituel","#spiritualité","#ésotérisme","#ésotérique","#developpement"],
-  defaultIsbn:"9782951245020", perDay:6, maxPx:1400, customKw:[],
+  defaultIsbn:"9782951245020", perDay:6, maxPx:1400, customKw:[], dormantM:6,
   msgs:[
     {t:"Remerciement",
      v:"{salut} et merci pour votre achat 🙂\nVotre colis partira sous 48 h et sera bien protégé.\nJe vous souhaite {voeu} {emoji}"},
@@ -672,11 +676,20 @@ async function runImport(htmlFile, photoFiles){
    ===================================================================== */
 function inStock(){ return books.filter(b => (b.status || "stock") === "stock"); }
 function pending(){ return books.filter(b => b.status === "pending"); }
+function dormantSince(b){
+  const n = settings.dormantM || 0;
+  if(!n || !b.createdAt) return 0;
+  const mois = (Date.now() - b.createdAt) / (1000 * 60 * 60 * 24 * 30.44);
+  return mois >= n ? Math.floor(mois) : 0;
+}
 function queue(){
   return inStock().slice().sort((a,b) => {
     if(a.priority !== b.priority) return (b.priority?1:0) - (a.priority?1:0);
     if(a.priority && b.priority) return a.priority - b.priority;
-    return (a.lastPublished || a.createdAt || 0) - (b.lastPublished || b.createdAt || 0);
+    const na = a.lastPublished ? 1 : 0, nb = b.lastPublished ? 1 : 0;
+    if(na !== nb) return na - nb;                     // jamais publié d'abord
+    if(!na && !nb) return (a.createdAt || 0) - (b.createdAt || 0);
+    return a.lastPublished - b.lastPublished;
   });
 }
 let daily = {day:"", n:0, skip:[], extra:0};
@@ -994,6 +1007,7 @@ function renderCat(){
           ' · ' + fmtDate(b.lastPublished) +
           (b.rotations ? ' · <span class="tick">' + b.rotations + '×</span>' : '') +
           (b.priority ? ' · <span class="pri">priorité</span>' : '') +
+          (dormantSince(b) ? ' · <span class="dort">dort ' + dormantSince(b) + ' mois</span>' : '') +
         '</span>' +
       '</span>' +
       '<button class="btn sm ghost" data-lot="' + esc(b.id) + '">' + (lot.has(b.id) ? '✓' : '+') + '</button>';
@@ -1770,6 +1784,7 @@ function msgFinal(v){
     .replace(/\{emoji\}/g, s.emoji)
     .replace(/\{prix\}/g,  prix);
 }
+let msgPrice = "";
 function renderMsgs(){
   const host = $("#msgList");
   if(!host) return;
@@ -1780,7 +1795,12 @@ function renderMsgs(){
         '<input class="msgT" data-i="' + i + '" value="' + esc(m.t || "") + '" placeholder="Nom du message">' +
         '<textarea class="msgV" data-i="' + i + '" rows="5" style="margin-top:8px">' + esc(m.v || "") + '</textarea>' +
       '</div>' +
-      '<p class="hint" style="margin:10px 0 0" id="msgPrev' + i + '"></p>' +
+      ((m.v || "").indexOf("{prix}") >= 0
+        ? '<div class="field" style="margin:12px 0 0"><label class="f" for="msgPrice">Prix du marché</label>' +
+          '<input id="msgPrice" placeholder="ex. entre 50 € et 100 €" value="' + esc(msgPrice) + '">' +
+          '<p class="hint" style="margin-top:6px">Remplace <b>{prix}</b> dans ce message.</p></div>'
+        : '') +
+      '<p class="hint" style="margin:10px 0 0; white-space:pre-wrap" id="msgPrev' + i + '"></p>' +
       '<div class="row" style="margin-top:12px; gap:8px">' +
         '<button class="btn ok grow" data-msgcopy="' + i + '">Copier</button>' +
         '<button class="btn mute" data-msgdel="' + i + '" aria-label="Supprimer ce message">✕</button>' +
@@ -1806,6 +1826,7 @@ function fillSettings(){
   $("#sig").value = settings.signature || "";
   $("#pool").value = (settings.pool || []).join(" ");
   $("#lbc").value = (settings.lbcTags || []).join(" ");
+  $("#dormantM").value = settings.dormantM != null ? settings.dormantM : 6;
   $("#defIsbn").value = settings.defaultIsbn || "";
   $("#poolN").textContent = (settings.pool || []).length;
   $("#poolTake").textContent = settings.poolTake;
@@ -1849,6 +1870,7 @@ $("#gear").onclick = () => showTab("set");
 $("#mailBtn").onclick = () => { renderMsgs(); showTab("msg"); };
 
 document.addEventListener("input", (e) => {
+  if(e.target.id === "msgPrice") msgPrice = e.target.value;
   if(e.target.id === "msgPrice" || e.target.classList.contains("msgV")){
     (settings.msgs || []).forEach((m, i) => {
       const v = document.querySelector('.msgV[data-i="' + i + '"]');
@@ -2048,6 +2070,7 @@ $("#saveSet").onclick = async () => {
   settings.signature = $("#sig").value.trim();
   settings.pool = ($("#pool").value.match(/#[^\s#]+/g) || []);
   settings.lbcTags = ($("#lbc").value.match(/#[^\s#]+/g) || []);
+  settings.dormantM = Math.max(0, parseInt($("#dormantM").value, 10) || 0);
   settings.defaultIsbn = $("#defIsbn").value.trim();
   await dbPut("meta", {k:"settings", v:settings});
   fillSettings(); render();
