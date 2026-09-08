@@ -1448,7 +1448,7 @@ function closeSheet(){
 }
 
 /* ---------- scan du code-barres ---------- */
-let scanStream = null, scanTimer = null, scanBox = null;
+let scanStream = null, scanTimer = null, scanBox = null, scanOpen = false;
 async function startScan(input){
   if(!("BarcodeDetector" in window)){
     toast("Ce navigateur ne sait pas lire les codes-barres. Saisissez l'ISBN à la main.");
@@ -1463,6 +1463,8 @@ async function startScan(input){
     '<button class="btn sm block ghost" type="button" style="margin-top:8px">Arrêter</button>';
   input.parentNode.parentNode.appendChild(scanBox);
   scanBox.querySelector("button").onclick = stopScan;
+  scanOpen = true;
+  pushState();
   const v = scanBox.querySelector("video");
   v.srcObject = scanStream; await v.play();
   const det = new window.BarcodeDetector({formats:["ean_13","ean_8","upc_a"]});
@@ -1477,6 +1479,7 @@ async function startScan(input){
   }, 400);
 }
 function stopScan(){
+  scanOpen = false;
   clearInterval(scanTimer); scanTimer = null;
   if(scanStream){ scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
   if(scanBox){ scanBox.remove(); scanBox = null; }
@@ -1496,6 +1499,10 @@ function newBookForm(idx, total){
       '<div class="field" style="margin:0"><label class="f">Prix désiré</label>' +
         '<input class="nPrice" inputmode="decimal"></div>' +
     '</div>' +
+    '<div class="field"><label class="f">État du livre</label>' +
+      '<select class="nState">' + ETATS.map(e =>
+        '<option value="' + esc(e) + '">' + esc(e || "— non renseigné —") + '</option>'
+      ).join("") + '</select></div>' +
     '<div class="field"><label class="f">ISBN</label>' +
       '<div class="row"><input class="nIsbn grow" inputmode="numeric">' +
       '<button class="btn sm nScan" type="button">Scanner</button>' +
@@ -1555,12 +1562,61 @@ function openAddLot(){
     $("#lotForms").innerHTML = h;
     $$("#lotForms .nBuy").forEach(inp => { inp.value = unit.toFixed(2); });
     wireAddForms(n, {amount:t, count:n});
+    const d = draftRead();
+    if(d && d.n === n && confirm("Une saisie non terminée a été retrouvée. La reprendre ?")) draftApply(d);
+    else draftClear();
     $("#lotNext").disabled = true;
     $("#lotForms").scrollIntoView({behavior:"smooth", block:"start"});
   };
 }
+const DRAFT_KEY = "rot.draft";
+function draftRead(){
+  try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"); } catch(e){ return null; }
+}
+function draftClear(){ try { localStorage.removeItem(DRAFT_KEY); } catch(e){} }
+function draftSave(n, lotInfo){
+  try {
+    const cards = $$("#sheetBody .card").filter(c => c.querySelector(".nTitle"));
+    if(!cards.length) return;
+    const d = {n:n, lot:lotInfo || null, livres: cards.map(c => ({
+      title: c.querySelector(".nTitle").value,
+      desc:  c.querySelector(".nDesc").value,
+      buy:   c.querySelector(".nBuy").value,
+      price: c.querySelector(".nPrice").value,
+      state: (c.querySelector(".nState") || {}).value || "",
+      isbn:  c.querySelector(".nIsbn").value,
+      theme: c.querySelector(".nTheme").value,
+      tags:  kwSelected(c.querySelector(".kwHost"))
+    }))};
+    const vide = d.livres.every(l =>
+      !l.title && !l.desc && !l.price && !l.isbn && !l.theme && !l.tags.length);
+    if(vide){ draftClear(); return; }
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(d));
+  } catch(e){}
+}
+function draftApply(d){
+  const cards = $$("#sheetBody .card").filter(c => c.querySelector(".nTitle"));
+  (d.livres || []).forEach((l, i) => {
+    const c = cards[i];
+    if(!c) return;
+    c.querySelector(".nTitle").value = l.title || "";
+    c.querySelector(".nDesc").value  = l.desc  || "";
+    c.querySelector(".nBuy").value   = l.buy   || "";
+    c.querySelector(".nPrice").value = l.price || "";
+    c.querySelector(".nIsbn").value  = l.isbn  || "";
+    c.querySelector(".nTheme").value = l.theme || "";
+    const st = c.querySelector(".nState");
+    if(st && l.state) st.value = l.state;
+    const kh = c.querySelector(".kwHost");
+    if(kh && (l.tags || []).length){
+      kh.innerHTML = kwPickerHTML(l.tags);
+      wireKwPicker(kh);
+    }
+  });
+}
 function wireAddForms(n, lotInfo){
   $$(".kwHost").forEach(h => wireKwPicker(h));
+  $("#sheetBody").oninput = () => draftSave(n, lotInfo);
   $$(".nNoIsbn").forEach(btn => {
     btn.onclick = () => { btn.parentNode.querySelector(".nIsbn").value = settings.defaultIsbn; };
   });
@@ -1591,7 +1647,7 @@ function wireAddForms(n, lotInfo){
         tags: kwSelected(c.querySelector(".kwHost")),
         price: num(c.querySelector(".nPrice").value),
         buyPrice: num(c.querySelector(".nBuy").value),
-        condition:"", parcel:"",
+        condition: (c.querySelector(".nState") || {}).value || "", parcel:"",
         createdAt: Date.now(), lastPublished:0, rotations:0, fresh:true,
         isbn: isbnNormalise(isbnRaw).value || isbnClean(isbnRaw),
         theme: c.querySelector(".nTheme").value.trim(),
@@ -1609,6 +1665,7 @@ function wireAddForms(n, lotInfo){
       await dbPut("purchases", p);
       purchases.push(p);
     }
+    draftClear();
     closeSheet();
     toast(added.length > 1 ? added.length + " livres ajoutés" : "Livre ajouté");
   };
@@ -1853,6 +1910,7 @@ function pushState(){
   history.pushState({app:++navDepth}, "");
 }
 window.addEventListener("popstate", () => {
+  if(scanOpen){ stopScan(); return; }
   if($("#sheet").classList.contains("on")){ closeSheet(); return; }
   const cur = $$("main section").find(s => s.classList.contains("on"));
   if(cur && cur.id !== "today"){ showTab("today", true); return; }
