@@ -1887,9 +1887,10 @@ function renderMsgs(){
   });
 }
 async function moveMsg(from, to){
-  const l = settings.msgs || [];
-  if(to < 0 || to >= l.length || from === to) return;
-  await saveMsgs();
+  if(from === to) return;
+  await saveMsgs();                 // reconstruit settings.msgs depuis l'écran
+  const l = settings.msgs || [];    // il faut donc la relire APRÈS
+  if(to < 0 || to >= l.length) return;
   l.splice(to, 0, l.splice(from, 1)[0]);
   await dbPut("meta", {k:"settings", v:settings});
   renderMsgs();
