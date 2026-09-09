@@ -58,6 +58,12 @@ section.on{display:block}
 .btn.mute{color:var(--muted); border-color:var(--line)}
 .achatLine{margin:-8px 0 12px; font-size:14px; color:var(--muted)}
 .dort{color:var(--brick)}
+.ord{background:transparent; border:1px solid var(--line); border-radius:8px;
+     color:var(--muted); font-size:13px; line-height:1; padding:8px 10px; cursor:pointer}
+.ord[disabled]{opacity:.3}
+.msgCard{transition:box-shadow .15s}
+.msgCard.drag{box-shadow:0 8px 24px rgba(0,0,0,.5); border-color:var(--brass);
+     position:relative; z-index:5; opacity:.97}
 .nu{background:transparent; border:0; border-bottom:1px solid var(--line);
     border-radius:0; padding:6px 2px}
 .nu:focus{border-bottom-color:var(--brass); outline:none}
@@ -1850,9 +1856,17 @@ function renderMsgs(){
   if(!host) return;
   const list = settings.msgs || [];
   host.innerHTML = list.map((m, i) =>
-    '<div class="card">' +
+    '<div class="card msgCard" data-card="' + i + '">' +
+      '<div class="row" style="gap:4px; align-items:flex-end">' +
+        '<div class="field grow" style="margin:0">' +
+          '<input class="msgT nu" data-i="' + i + '" value="' + esc(m.t || "") + '" placeholder="Nom du message">' +
+        '</div>' +
+        '<button class="ord" data-up="' + i + '" aria-label="Monter"' +
+          (i === 0 ? " disabled" : "") + '>▲</button>' +
+        '<button class="ord" data-down="' + i + '" aria-label="Descendre"' +
+          (i === list.length - 1 ? " disabled" : "") + '>▼</button>' +
+      '</div>' +
       '<div class="field" style="margin:0">' +
-        '<input class="msgT nu" data-i="' + i + '" value="' + esc(m.t || "") + '" placeholder="Nom du message">' +
         '<textarea class="msgV nu" data-i="' + i + '" rows="5" style="margin-top:6px">' + esc(m.v || "") + '</textarea>' +
       '</div>' +
       ((m.v || "").indexOf("{prix}") >= 0
@@ -1871,6 +1885,14 @@ function renderMsgs(){
     const pv = $("#msgPrev" + i);
     if(pv) pv.textContent = msgFinal(m.v);
   });
+}
+async function moveMsg(from, to){
+  const l = settings.msgs || [];
+  if(to < 0 || to >= l.length || from === to) return;
+  await saveMsgs();
+  l.splice(to, 0, l.splice(from, 1)[0]);
+  await dbPut("meta", {k:"settings", v:settings});
+  renderMsgs();
 }
 async function saveMsgs(){
   settings.msgs = (settings.msgs || []).map((m, i) => {
@@ -1949,6 +1971,10 @@ document.addEventListener("click", async (e) => {
     copy(msgFinal(v), mc);
     return;
   }
+  const up = e.target.closest("[data-up]");
+  if(up){ const i = Number(up.dataset.up); await moveMsg(i, i - 1); return; }
+  const dn = e.target.closest("[data-down]");
+  if(dn){ const i = Number(dn.dataset.down); await moveMsg(i, i + 1); return; }
   const md = e.target.closest("[data-msgdel]");
   if(md){
     if(!confirm("Supprimer ce message ?")) return;
@@ -1967,7 +1993,54 @@ document.addEventListener("click", async (e) => {
   }
 });
 
-/* ---- changement d'onglet par glissement horizontal ---- */
+/* ---- réordonner les messages par appui long ---- */
+(function(){
+  let timer = null, carte = null, y0 = 0, actif = false;
+
+  function fin(){
+    clearTimeout(timer); timer = null;
+    if(carte){ carte.classList.remove("drag"); carte.style.transform = ""; }
+    carte = null; actif = false;
+  }
+
+  document.addEventListener("touchstart", (e) => {
+    const c = e.target.closest && e.target.closest(".msgCard");
+    if(!c || e.touches.length !== 1) return;
+    if(e.target.closest("input, textarea, button")) return;
+    y0 = e.touches[0].clientY;
+    timer = setTimeout(() => {
+      carte = c; actif = true;
+      c.classList.add("drag");
+      if(navigator.vibrate) navigator.vibrate(15);
+    }, 450);
+  }, {passive:true});
+
+  document.addEventListener("touchmove", (e) => {
+    if(!actif){
+      if(timer && Math.abs(e.touches[0].clientY - y0) > 10){ clearTimeout(timer); timer = null; }
+      return;
+    }
+    e.preventDefault();
+    carte.style.transform = "translateY(" + (e.touches[0].clientY - y0) + "px)";
+  }, {passive:false});
+
+  document.addEventListener("touchend", async () => {
+    if(!actif){ fin(); return; }
+    const cartes = $$(".msgCard");
+    const from = Number(carte.dataset.card);
+    const y = carte.getBoundingClientRect().top + carte.offsetHeight / 2;
+    let to = 0;
+    cartes.forEach((c, i) => {
+      if(i === from) return;
+      const r = c.getBoundingClientRect();
+      if(r.top + r.height / 2 < y) to++;
+    });
+    fin();
+    if(to !== from) await moveMsg(from, to);
+  }, {passive:true});
+})();
+
+/* ---- changement d\'onglet par glissement horizontal ---- */
 const TABS = ["today", "cat", "cours", "bilan"];
 (function(){
   let x0 = 0, y0 = 0, actif = false;
