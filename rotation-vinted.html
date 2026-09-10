@@ -58,6 +58,9 @@ section.on{display:block}
 .btn.mute{color:var(--muted); border-color:var(--line)}
 .achatLine{margin:-8px 0 12px; font-size:14px; color:var(--muted)}
 .dort{color:var(--brick)}
+.msgNom{font-family:var(--serif); font-size:18px; color:var(--text);
+     padding:8px 2px; cursor:pointer}
+.plie{padding-top:10px; padding-bottom:10px}
 .ord{background:transparent; border:1px solid var(--line); border-radius:8px;
      color:var(--muted); font-size:13px; line-height:1; padding:8px 10px; cursor:pointer}
 .ord[disabled]{opacity:.3}
@@ -1851,12 +1854,23 @@ function msgFinal(v){
     .replace(/\{prix\}/g,  prix);
 }
 let msgPrice = "";
+let msgOpen = -1;
 function renderMsgs(){
   const host = $("#msgList");
   if(!host) return;
   const list = settings.msgs || [];
-  host.innerHTML = list.map((m, i) =>
-    '<div class="card msgCard" data-card="' + i + '">' +
+  host.innerHTML = list.map((m, i) => {
+    const auPrix = (m.v || "").indexOf("{prix}") >= 0;
+    const ouvert = (msgOpen === i) || auPrix;
+    if(!ouvert){
+      return '<div class="card msgCard plie" data-card="' + i + '">' +
+        '<div class="row" style="gap:10px">' +
+          '<div class="msgNom grow" data-open="' + i + '">' + esc(m.t || "Sans nom") + '</div>' +
+          '<button class="btn ok" data-msgcopy="' + i + '">Copier</button>' +
+        '</div>' +
+      '</div>';
+    }
+    return '<div class="card msgCard" data-card="' + i + '">' +
       '<div class="row" style="gap:4px; align-items:flex-end">' +
         '<div class="field grow" style="margin:0">' +
           '<input class="msgT nu" data-i="' + i + '" value="' + esc(m.t || "") + '" placeholder="Nom du message">' +
@@ -1865,11 +1879,12 @@ function renderMsgs(){
           (i === 0 ? " disabled" : "") + '>▲</button>' +
         '<button class="ord" data-down="' + i + '" aria-label="Descendre"' +
           (i === list.length - 1 ? " disabled" : "") + '>▼</button>' +
+        (auPrix ? '' : '<button class="ord" data-close="' + i + '" aria-label="Replier">▾</button>') +
       '</div>' +
       '<div class="field" style="margin:0">' +
         '<textarea class="msgV nu" data-i="' + i + '" rows="5" style="margin-top:6px">' + esc(m.v || "") + '</textarea>' +
       '</div>' +
-      ((m.v || "").indexOf("{prix}") >= 0
+      (auPrix
         ? '<div class="field" style="margin:12px 0 0"><label class="f" for="msgPrice">Prix du marché</label>' +
           '<input id="msgPrice" placeholder="ex. entre 50 € et 100 €" value="' + esc(msgPrice) + '">' +
           '<p class="hint" style="margin-top:6px">Remplace <b>{prix}</b> dans ce message.</p></div>'
@@ -1879,7 +1894,8 @@ function renderMsgs(){
         '<button class="btn ok grow" data-msgcopy="' + i + '">Copier</button>' +
         '<button class="btn mute" data-msgdel="' + i + '" aria-label="Supprimer ce message">✕</button>' +
       '</div>' +
-    '</div>').join("");
+    '</div>';
+  }).join("");
   if(!list.length) host.innerHTML = '<p class="empty">Aucun message enregistré.</p>';
   list.forEach((m, i) => {
     const pv = $("#msgPrev" + i);
@@ -1972,6 +1988,10 @@ document.addEventListener("click", async (e) => {
     copy(msgFinal(v), mc);
     return;
   }
+  const op = window.msgDragJusteFini ? null : e.target.closest(".msgNom[data-open]");
+  if(op){ await saveMsgs(); msgOpen = Number(op.dataset.open); renderMsgs(); return; }
+  const cl = e.target.closest("[data-close]");
+  if(cl){ await saveMsgs(); msgOpen = -1; renderMsgs(); return; }
   const up = e.target.closest("[data-up]");
   if(up){ const i = Number(up.dataset.up); await moveMsg(i, i - 1); return; }
   const dn = e.target.closest("[data-down]");
@@ -1990,6 +2010,7 @@ document.addEventListener("click", async (e) => {
     settings.msgs = settings.msgs || [];
     settings.msgs.push({t:"Nouveau message", v:""});
     await dbPut("meta", {k:"settings", v:settings});
+    msgOpen = settings.msgs.length - 1;
     renderMsgs();
   }
 });
@@ -1997,6 +2018,7 @@ document.addEventListener("click", async (e) => {
 /* ---- réordonner les messages par appui long ---- */
 (function(){
   let timer = null, carte = null, y0 = 0, actif = false;
+  window.msgDragJusteFini = false;
 
   function fin(){
     clearTimeout(timer); timer = null;
@@ -2037,6 +2059,8 @@ document.addEventListener("click", async (e) => {
       if(r.top + r.height / 2 < y) to++;
     });
     fin();
+    window.msgDragJusteFini = true;
+    setTimeout(() => { window.msgDragJusteFini = false; }, 400);
     if(to !== from) await moveMsg(from, to);
   }, {passive:true});
 })();
