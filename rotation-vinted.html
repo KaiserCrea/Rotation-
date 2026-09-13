@@ -1635,6 +1635,21 @@ function wireAddForms(n, lotInfo){
     const cards = $$("#sheetBody .card").filter(c => c.querySelector(".nTitle"));
     const titles = cards.map(c => c.querySelector(".nTitle").value.trim());
     if(titles.some(t => !t)){ toast("Il manque un titre."); return; }
+
+    const sansPhoto = cards
+      .map((c, i) => ((c.querySelector(".nPhotos").files || []).length ? null : (titles[i] || "livre " + (i+1))))
+      .filter(Boolean);
+    if(sansPhoto.length){
+      const liste = sansPhoto.slice(0, 6).map(t => "\u2022 " + t).join("\n") +
+        (sansPhoto.length > 6 ? "\n\u2026 et " + (sansPhoto.length - 6) + " autres" : "");
+      if(!confirm(
+        (sansPhoto.length > 1
+          ? sansPhoto.length + " livres n'ont aucune photo :"
+          : "Ce livre n'a aucune photo :") + "\n\n" + liste +
+        "\n\nEnregistrer quand même ?"
+      )) return;
+    }
+
     const btn = e.currentTarget;
     btn.disabled = true; btn.textContent = "Enregistrement…";
     const added = [];
