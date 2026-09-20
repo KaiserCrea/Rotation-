@@ -502,6 +502,8 @@ function eur(v){
   const n = Number(v) || 0;
   return n.toFixed(2).replace(/\.00$/,"").replace(".",",") + " €";
 }
+// Bilan : montants arrondis à l'euro, les centimes n'y apprennent rien.
+function eurR(v){ return Math.round(Number(v) || 0) + " €"; }
 function num(v){ const n = parseFloat(String(v).replace(",", ".")); return isFinite(n) ? n : 0; }
 function saveFile(blob, name){
   const url = URL.createObjectURL(blob), a = document.createElement("a");
@@ -872,10 +874,10 @@ function renderBilan(){
   $("#bMonthName").textContent = monthLabel(cur);
   const res = c.out - c.in;
   const el = $("#bMonthResult");
-  el.textContent = (res >= 0 ? "+" : "") + eur(res);
+  el.textContent = (res >= 0 ? "+" : "") + eurR(res);
   el.className = "big " + (res >= 0 ? "pos" : "neg");
-  $("#bMonthIn").textContent = eur(c.in);
-  $("#bMonthOut").textContent = eur(c.out);
+  $("#bMonthIn").textContent = eurR(c.in);
+  $("#bMonthOut").textContent = eurR(c.out);
   $("#bMonthN").textContent = c.n;
 
   const prevKey = (Number(cur.slice(0,4)) - 1) + cur.slice(4);
@@ -884,9 +886,9 @@ function renderBilan(){
   else {
     const pres = pm.out - pm.in, d = res - pres;
     yo.style.display = "block";
-    yo.innerHTML = monthLabel(prevKey) + " : " + (pres >= 0 ? "+" : "") + eur(pres) +
+    yo.innerHTML = monthLabel(prevKey) + " : " + (pres >= 0 ? "+" : "") + eurR(pres) +
       ' · <span class="' + (d >= 0 ? "pos" : "neg") + '">' +
-      (d >= 0 ? "+" : "\u2212") + eur(Math.abs(d)) + '</span> cette année';
+      (d >= 0 ? "+" : "\u2212") + eurR(Math.abs(d)) + '</span> cette année';
   }
 
   let best = null;
@@ -897,8 +899,8 @@ function renderBilan(){
   else if(best === cur){ rec.innerHTML = '<span class="best">Meilleur mois à ce jour.</span>'; }
   else {
     const reste = m[best].out - c.out;
-    rec.innerHTML = "Meilleur mois : " + monthLabel(best) + " avec " + eur(m[best].out) + "." +
-      (c.out > 0 ? " Il manque " + eur(reste) + " pour le dépasser." : "");
+    rec.innerHTML = "Meilleur mois : " + monthLabel(best) + " avec " + eurR(m[best].out) + "." +
+      (c.out > 0 ? " Il manque " + eurR(reste) + " pour le dépasser." : "");
   }
 
   const y = yearsData(), yk = Object.keys(y).sort().reverse(), yh = $("#bYears");
@@ -909,8 +911,8 @@ function renderBilan(){
     row.className = "mrow";
     row.style.cursor = "pointer";
     row.innerHTML = '<span class="m">' + (openYears.has(k) ? "▾ " : "▸ ") + k + '</span>' +
-      '<span class="v">' + eur(e.in) + " → " + eur(e.out) +
-      ' · <span class="' + (r >= 0 ? "pos" : "neg") + '">' + (r >= 0 ? "+" : "") + eur(r) + '</span></span>';
+      '<span class="v">' + eurR(e.in) + " → " + eurR(e.out) +
+      ' · <span class="' + (r >= 0 ? "pos" : "neg") + '">' + (r >= 0 ? "+" : "") + eurR(r) + '</span></span>';
     row.onclick = () => {
       openYears.has(k) ? openYears.delete(k) : openYears.add(k);
       renderBilan();
@@ -930,7 +932,7 @@ function renderBilan(){
       moy.className = "hint";
       moy.style.margin = "4px 0 6px";
       moy.innerHTML = "moyenne <span class=\"" + (r >= 0 ? "pos" : "neg") + "\">" +
-        (r >= 0 ? "+" : "") + eur(r / nMois) + "</span> par mois sur " + nMois + " mois";
+        (r >= 0 ? "+" : "") + eurR(r / nMois) + "</span> par mois sur " + nMois + " mois";
       box.appendChild(moy);
       keys.filter(mk => mk.slice(0,4) === k).forEach(mk => {
         const em = m[mk], rm = em.out - em.in;
@@ -940,8 +942,8 @@ function renderBilan(){
         d.style.padding = "7px 0";
         d.innerHTML = '<span class="m' + (mk === best ? " best" : "") + '" style="font-size:13.5px">' +
           monthLabel(mk) + '</span>' +
-          '<span class="v" style="font-size:13px">' + eur(em.in) + " → " + eur(em.out) +
-          ' · <span class="' + (rm >= 0 ? "pos" : "neg") + '">' + (rm >= 0 ? "+" : "") + eur(rm) + '</span></span>';
+          '<span class="v" style="font-size:13px">' + eurR(em.in) + " → " + eurR(em.out) +
+          ' · <span class="' + (rm >= 0 ? "pos" : "neg") + '">' + (rm >= 0 ? "+" : "") + eurR(rm) + '</span></span>';
         box.appendChild(d);
       });
       yh.appendChild(box);
@@ -952,10 +954,10 @@ function renderBilan(){
   const tin  = purchases.reduce((s,p) => s + p.amount, 0) + (report.invested || 0);
   const tout = sales.reduce((s,x) => s + x.amount, 0) + (report.recovered || 0);
   const tr = tout - tin, ael = $("#bAllResult");
-  ael.textContent = (tr >= 0 ? "+" : "") + eur(tr);
+  ael.textContent = (tr >= 0 ? "+" : "") + eurR(tr);
   ael.className = "big " + (tr >= 0 ? "pos" : "neg");
-  $("#bAllIn").textContent = eur(tin);
-  $("#bAllOut").textContent = eur(tout);
+  $("#bAllIn").textContent = eurR(tin);
+  $("#bAllOut").textContent = eurR(tout);
   $("#bReportNote").textContent = cahierDone ? "Depuis mars 2023." : "Depuis décembre 2022.";
 }
 
