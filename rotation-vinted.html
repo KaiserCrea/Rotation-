@@ -617,6 +617,13 @@ function parseExport(htmlText){
   return {books:out, signature:sig};
 }
 async function shrink(file, maxPx, quality){
+  try {
+    return await shrinkStrict(file, maxPx, quality);
+  } catch(e){
+    return file;            // mieux vaut la photo d'origine que pas de photo
+  }
+}
+async function shrinkStrict(file, maxPx, quality){
   const bmp = await createImageBitmap(file);
   const r = Math.min(1, maxPx / Math.max(bmp.width, bmp.height));
   const w = Math.max(1, Math.round(bmp.width*r)), h = Math.max(1, Math.round(bmp.height*r));
@@ -624,7 +631,9 @@ async function shrink(file, maxPx, quality){
   cv.width = w; cv.height = h;
   cv.getContext("2d").drawImage(bmp, 0, 0, w, h);
   bmp.close && bmp.close();
-  return new Promise(res => cv.toBlob(b => res(b), "image/jpeg", quality || 0.9));
+  const out = await new Promise(res => cv.toBlob(b => res(b), "image/jpeg", quality || 0.9));
+  if(!out || !out.size) throw new Error("toBlob vide");
+  return out;
 }
 async function runImport(htmlFile, photoFiles){
   const prog = $("#impProg"), bar = $("#pbar"), msg = $("#pmsg");
@@ -1656,12 +1665,24 @@ function wireAddForms(n, lotInfo){
     for(let i = 0; i < cards.length; i++){
       const c = cards[i], id = uid("n");
       const files = Array.from(c.querySelector(".nPhotos").files || []);
-      let k = 0;
+      let k = 0, perdues = 0;
       for(const f of files){
         try{
           await dbPut("photos", {key:id + "_" + k, blob: await shrink(f, settings.maxPx, 0.9)});
           k++;
-        }catch(err){}
+        }catch(err){ perdues++; }
+      }
+      if(perdues){
+        for(let j = 0; j < k; j++){ try{ await dbDel("photos", id + "_" + j); }catch(e){} }
+        for(const b of added){
+          for(let j = 0; j < (b.photoCount || 0); j++){ try{ await dbDel("photos", b.id + "_" + j); }catch(e){} }
+          try{ await dbDel("books", b.id); }catch(e){}
+        }
+        btn.disabled = false; btn.textContent = "Enregistrer";
+        alert("Les photos de « " + titles[i] + " » n'ont pas pu être lues.\n\n" +
+              "Rien n'a été enregistré, ta saisie est intacte. " +
+              "Resélectionne les photos de ce livre, puis réessaie.");
+        return;
       }
       const isbnRaw = c.querySelector(".nIsbn").value;
       const nb = {
