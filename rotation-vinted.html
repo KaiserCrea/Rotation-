@@ -58,6 +58,7 @@ section.on{display:block}
 .btn.mute{color:var(--muted); border-color:var(--line)}
 .achatLine{margin:-8px 0 12px; font-size:14px; color:var(--muted)}
 .dort{color:var(--brick)}
+.resv{color:var(--muted); font-style:italic}
 .msgNom{font-family:var(--serif); font-size:18px; color:var(--text);
      padding:8px 2px; cursor:pointer}
 .plie{padding-top:10px; padding-bottom:10px}
@@ -617,10 +618,15 @@ function parseExport(htmlText){
   return {books:out, signature:sig};
 }
 async function shrink(file, maxPx, quality){
+  // On lit d'abord les octets en mémoire : un fichier libéré par Android
+  // échoue ici, franchement, au lieu de produire une photo vide plus tard.
+  const buf = await file.arrayBuffer();
+  if(!buf || !buf.byteLength) throw new Error("fichier vide ou libéré");
+  const copie = new Blob([buf], {type: file.type || "image/jpeg"});
   try {
-    return await shrinkStrict(file, maxPx, quality);
+    return await shrinkStrict(copie, maxPx, quality);
   } catch(e){
-    return file;            // mieux vaut la photo d'origine que pas de photo
+    return copie;           // la photo d'origine, mais bien en mémoire
   }
 }
 async function shrinkStrict(file, maxPx, quality){
@@ -692,6 +698,12 @@ async function runImport(htmlFile, photoFiles){
    File de rotation
    ===================================================================== */
 function inStock(){ return books.filter(b => (b.status || "stock") === "stock"); }
+function inReserve(){ return books.filter(b => b.status === "reserve"); }
+function normTitre(t){
+  return String(t || "").toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ").trim();
+}
 function pending(){ return books.filter(b => b.status === "pending"); }
 function dormantSince(b){
   const n = settings.dormantM || 0;
@@ -988,7 +1000,7 @@ function renderDay(){
   }
 }
 function renderCat(){
-  const stock = inStock();
+  const stock = inStock().concat(inReserve());
   const invested = stock.reduce((s,b) => s + (b.buyPrice || 0), 0);
   const desired  = stock.reduce((s,b) => s + (b.price || 0), 0);
   $("#catTotals").innerHTML =
@@ -1029,6 +1041,7 @@ function renderCat(){
           (b.rotations ? ' · <span class="tick">' + b.rotations + '×</span>' : '') +
           (b.priority ? ' · <span class="pri">priorité</span>' : '') +
           (dormantSince(b) ? ' · <span class="dort">dort ' + dormantSince(b) + ' mois</span>' : '') +
+          (b.status === "reserve" ? ' · <span class="resv">en réserve</span>' : '') +
         '</span>' +
       '</span>' +
       '<button class="btn sm ghost" data-lot="' + esc(b.id) + '">' + (lot.has(b.id) ? '✓' : '+') + '</button>';
@@ -1348,6 +1361,13 @@ function openManage(id){
           'Rien n\'entre au bilan tant que le paiement n\'est pas confirmé.</p>' +
         '<button class="btn main block" id="sellGo" style="margin-top:10px">Passer en transaction</button>' +
       '</div>' +
+      '<button class="btn block" id="resv" style="margin-bottom:10px">' +
+        (b.status === "reserve" ? "Remettre en circulation" : "Mettre en réserve") + '</button>' +
+      '<p class="hint" style="margin:-4px 0 14px">' +
+        (b.status === "reserve"
+          ? "Ce livre ne sort pas dans Aujourd'hui. Il reste compté dans ton investi."
+          : "Pour un second exemplaire : le livre reste au catalogue et dans tes totaux, mais ne sort plus en rotation.") +
+      '</p>' +
       '<button class="btn block warn" id="del">Supprimer du catalogue</button>' +
     '</div>';
 
@@ -1444,6 +1464,13 @@ function openManage(id){
     b.saleGroup = uid("g");
     await dbPut("books", b);
     closeSheet(); toast("En transaction — voir l'onglet En cours");
+  };
+  $("#resv").onclick = async () => {
+    b.status = (b.status === "reserve") ? "stock" : "reserve";
+    if(b.status === "reserve"){ b.priority = 0; lot.delete(b.id); }
+    await dbPut("books", b);
+    closeSheet();
+    toast(b.status === "reserve" ? "Mis en réserve" : "Remis en circulation");
   };
   $("#del").onclick = async () => {
     if(!confirm("Supprimer « " + b.title + " » et ses photos ?\nCette action est définitive et ne crée aucune vente.")) return;
@@ -1645,6 +1672,21 @@ function wireAddForms(n, lotInfo){
     const titles = cards.map(c => c.querySelector(".nTitle").value.trim());
     if(titles.some(t => !t)){ toast("Il manque un titre."); return; }
 
+    const deja = [];
+    titles.forEach((t, i) => {
+      const n = normTitre(t);
+      if(!n) return;
+      if(books.some(b => (b.status || "stock") !== "pending" && normTitre(b.title) === n)) deja.push(t);
+    });
+    if(deja.length){
+      if(!confirm(
+        (deja.length > 1 ? "Ces titres existent déjà au catalogue :" : "Ce titre existe déjà au catalogue :") +
+        "\n\n\u2022 " + deja.join("\n\u2022 ") +
+        "\n\nSi c'est un second exemplaire, enregistre et pense à en mettre un en réserve.\n\n" +
+        "Enregistrer quand même ?"
+      )) return;
+    }
+
     const sansPhoto = cards
       .map((c, i) => ((c.querySelector(".nPhotos").files || []).length ? null : (titles[i] || "livre " + (i+1))))
       .filter(Boolean);
@@ -1668,7 +1710,11 @@ function wireAddForms(n, lotInfo){
       let k = 0, perdues = 0;
       for(const f of files){
         try{
-          await dbPut("photos", {key:id + "_" + k, blob: await shrink(f, settings.maxPx, 0.9)});
+          const blob = await shrink(f, settings.maxPx, 0.9);
+          if(!blob || !blob.size) throw new Error("photo vide");
+          await dbPut("photos", {key:id + "_" + k, blob:blob});
+          const relu = await dbGet("photos", id + "_" + k);      // on relit pour vérifier
+          if(!relu || !relu.blob || !relu.blob.size) throw new Error("photo non relue");
           k++;
         }catch(err){ perdues++; }
       }
@@ -1679,8 +1725,9 @@ function wireAddForms(n, lotInfo){
           try{ await dbDel("books", b.id); }catch(e){}
         }
         btn.disabled = false; btn.textContent = "Enregistrer";
-        alert("Les photos de « " + titles[i] + " » n'ont pas pu être lues.\n\n" +
-              "Rien n'a été enregistré, ta saisie est intacte. " +
+        alert(perdues + (perdues > 1 ? " photos de « " : " photo de « ") + titles[i] +
+              " » n'ont pas pu être enregistrées.\n\n" +
+              "Rien n'a été enregistré, ta saisie est intacte.\n" +
               "Resélectionne les photos de ce livre, puis réessaie.");
         return;
       }
@@ -2167,7 +2214,18 @@ document.addEventListener("click", async (e) => {
       await dbDel("books", b.id);
       books = books.filter(x => x.id !== b.id);
     }
+    const jumeaux = [];
+    grp.forEach(b => {
+      inReserve().forEach(r => {
+        if(normTitre(r.title) === normTitre(b.title)) jumeaux.push(r.title);
+      });
+    });
     toast(grp.length > 1 ? "Lot confirmé" : "Vente confirmée");
+    if(jumeaux.length){
+      setTimeout(() => alert(
+        "Tu as un autre exemplaire en réserve :\n\n\u2022 " + jumeaux.join("\n\u2022 ") +
+        "\n\nÀ remettre en circulation depuis sa fiche si tu l'as toujours."), 350);
+    }
     render(); return;
   }
   const sh = e.target.closest("[data-ship]");
