@@ -492,6 +492,16 @@ function dayKey(ts){
   return d.getFullYear() + "-" + p(d.getMonth()+1) + "-" + p(d.getDate());
 }
 function monthKey(ts){ return dayKey(ts).slice(0,7); }
+/* Période comptable : du 27 au 26. Une période porte le nom du mois où elle
+   se termine (du 27 août au 26 septembre = septembre). */
+function periodKey(ts){
+  const d = ts ? new Date(ts) : new Date();
+  if(d.getDate() >= 27) d.setDate(1), d.setMonth(d.getMonth() + 1);
+  return monthKey(d.getTime());
+}
+/* Les mois d'historique importés (count à 0) sont déjà des périodes du 27 :
+   on les garde sur le mois où ils ont été rangés, sans les déplacer. */
+function entryKey(e){ return e.count === 0 ? monthKey(e.date) : periodKey(e.date); }
 function monthLabel(k){
   const [y,m] = k.split("-");
   const noms = ["janvier","février","mars","avril","mai","juin","juillet","août",
@@ -855,8 +865,8 @@ async function generate(b, btn){
 function monthsData(){
   const m = {};
   const touch = (k) => { if(!m[k]) m[k] = {in:0, out:0, n:0}; return m[k]; };
-  purchases.forEach(p => { touch(monthKey(p.date)).in += p.amount; });
-  sales.forEach(s => { const e = touch(monthKey(s.date)); e.out += s.amount; e.n += (s.count == null ? 1 : s.count); });
+  purchases.forEach(p => { touch(entryKey(p)).in += p.amount; });
+  sales.forEach(s => { const e = touch(entryKey(s)); e.out += s.amount; e.n += (s.count == null ? 1 : s.count); });
   return m;
 }
 function yearsData(){
@@ -870,7 +880,7 @@ function yearsData(){
 }
 function renderBilan(){
   const m = monthsData(), keys = Object.keys(m).sort().reverse();
-  const cur = monthKey(), c = m[cur] || {in:0,out:0,n:0};
+  const cur = periodKey(), c = m[cur] || {in:0,out:0,n:0};
   $("#bMonthName").textContent = monthLabel(cur);
   const res = c.out - c.in;
   const el = $("#bMonthResult");
@@ -923,10 +933,10 @@ function renderBilan(){
       const box = document.createElement("div");
       box.style.padding = "2px 0 10px 14px";
 
-      const now = new Date();
+      const curP = periodKey();
       const mois = Object.keys(m).filter(x => x.slice(0,4) === k).sort();
       const premier = mois.length ? Number(mois[0].slice(5)) : 1;
-      const dernier = (Number(k) === now.getFullYear()) ? now.getMonth() + 1 : 12;
+      const dernier = (k === curP.slice(0,4)) ? Number(curP.slice(5)) : 12;
       const nMois = Math.max(1, dernier - premier + 1);
       const moy = document.createElement("p");
       moy.className = "hint";
