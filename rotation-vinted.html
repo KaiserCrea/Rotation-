@@ -218,6 +218,11 @@ progress{width:100%; height:8px}
   </div>
   <p class="hint" id="catCount" style="margin-bottom:4px"></p>
   <ul class="q" id="catList"></ul>
+  <div id="resvBox" style="display:none; margin-top:22px">
+    <h2 style="font-size:16px; margin-bottom:4px">En réserve</h2>
+    <p class="hint" style="margin-bottom:4px">Ces livres ne sortent pas dans Aujourd'hui. Ouvre une fiche pour remettre le livre en circulation.</p>
+    <ul class="q" id="resvList"></ul>
+  </div>
 </section>
 
 <!-- ========== EN COURS ========== -->
@@ -711,6 +716,24 @@ async function runImport(htmlFile, photoFiles){
    ===================================================================== */
 function inStock(){ return books.filter(b => (b.status || "stock") === "stock"); }
 function inReserve(){ return books.filter(b => b.status === "reserve"); }
+/* Quand un livre part en vente, on signale un second exemplaire en réserve
+   et on propose de le remettre en circulation. Rien n'est fait sans accord. */
+async function proposeJumeaux(vendus){
+  const vus = new Set();
+  for(const v of vendus){
+    const n = normTitre(v.title);
+    for(const r of inReserve()){
+      if(vus.has(r.id) || normTitre(r.title) !== n) continue;
+      vus.add(r.id);
+      if(confirm("Tu as un autre exemplaire en réserve :\n\n\u2022 " + r.title +
+                 "\n\nLe remettre en circulation maintenant ?")){
+        r.status = "stock";
+        await dbPut("books", r);
+        toast("Second exemplaire remis en circulation");
+      }
+    }
+  }
+}
 function normTitre(t){
   return String(t || "").toLowerCase()
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -1060,6 +1083,24 @@ function renderCat(){
     ul.appendChild(li);
   });
   if(!list.length) ul.innerHTML = '<p class="empty">Aucun livre ne correspond.</p>';
+
+  let resv = inReserve().slice().sort((a,b) => a.title.localeCompare(b.title, "fr"));
+  if(term) resv = resv.filter(b => b.title.toLowerCase().includes(term));
+  if(themeFilter) resv = resv.filter(b => b.theme === themeFilter);
+  const rl = $("#resvList");
+  rl.innerHTML = "";
+  resv.forEach(b => {
+    const li = document.createElement("li");
+    li.innerHTML =
+      '<span class="n">—</span>' +
+      '<span class="grow" data-manage="' + esc(b.id) + '">' +
+        '<span class="t">' + esc(b.title) + '</span>' +
+        '<span class="s">achat ' + eur(b.buyPrice || 0) + ' · désiré ' + eur(b.price) +
+          ' · <span class="resv">en réserve</span></span>' +
+      '</span>';
+    rl.appendChild(li);
+  });
+  $("#resvBox").style.display = resv.length ? "block" : "none";
 }
 function groupOf(b){ return b.saleGroup || ("solo-" + b.id); }
 function pendingGroups(){
@@ -1476,6 +1517,8 @@ function openManage(id){
     b.saleGroup = uid("g");
     await dbPut("books", b);
     closeSheet(); toast("En transaction — voir l'onglet En cours");
+    await proposeJumeaux([b]);
+    render();
   };
   $("#resv").onclick = async () => {
     b.status = (b.status === "reserve") ? "stock" : "reserve";
@@ -2226,18 +2269,8 @@ document.addEventListener("click", async (e) => {
       await dbDel("books", b.id);
       books = books.filter(x => x.id !== b.id);
     }
-    const jumeaux = [];
-    grp.forEach(b => {
-      inReserve().forEach(r => {
-        if(normTitre(r.title) === normTitre(b.title)) jumeaux.push(r.title);
-      });
-    });
     toast(grp.length > 1 ? "Lot confirmé" : "Vente confirmée");
-    if(jumeaux.length){
-      setTimeout(() => alert(
-        "Tu as un autre exemplaire en réserve :\n\n\u2022 " + jumeaux.join("\n\u2022 ") +
-        "\n\nÀ remettre en circulation depuis sa fiche si tu l'as toujours."), 350);
-    }
+    await proposeJumeaux(grp);
     render(); return;
   }
   const sh = e.target.closest("[data-ship]");
@@ -2302,6 +2335,7 @@ $("#lotSell").onclick = async () => {
   await dbPutMany("books", sel);
   lot.clear();
   toast(sel.length + " livres passés en transaction");
+  await proposeJumeaux(sel);
   render(); showTab("cours");
 };
 
