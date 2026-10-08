@@ -211,6 +211,9 @@ progress{width:100%; height:8px}
       <span><span id="lotN">0</span> sélectionnés</span>
       <button class="btn sm ghost" id="lotClear">Annuler</button>
     </div>
+    <p class="hint" id="lotSums" style="margin:6px 0 0"></p>
+    <button type="button" id="lotToggle" style="background:none; border:0; padding:8px 0 2px; color:var(--brass); font-size:14px">▸ Voir la sélection</button>
+    <ol id="lotList" style="display:none; list-style:none; margin:4px 0 0; padding:0"></ol>
     <div class="row" style="gap:8px; margin-top:10px">
       <button class="btn sm grow" id="lotGo">Passer en priorité</button>
       <button class="btn sm main grow" id="lotSell">Vendre la sélection</button>
@@ -1062,6 +1065,7 @@ function renderCat(){
   $("#catCount").textContent = list.length + " livres affichés";
   $("#lotBar").style.display = lot.size ? "block" : "none";
   $("#lotN").textContent = lot.size;
+  renderLotList();
 
   const ul = $("#catList");
   ul.innerHTML = "";
@@ -2317,12 +2321,46 @@ $("#lotGo").onclick = async () => {
   render(); showTab("today");
 };
 
+/* Sélection en cours : prix cumulés et liste dépliante des titres cochés */
+let lotOpen = false;
+function renderLotList(){
+  const sel = books.filter(b => lot.has(b.id))
+    .sort((a,b) => a.title.localeCompare(b.title, "fr", {sensitivity:"base"}));
+  const achat = sel.reduce((s,b) => s + (b.buyPrice || 0), 0);
+  const desire = sel.reduce((s,b) => s + (b.price || 0), 0);
+  $("#lotSums").textContent = "achat " + eur(achat) + " · désiré " + eur(desire);
+  $("#lotToggle").textContent = (lotOpen ? "▾ Masquer la sélection" : "▸ Voir la sélection");
+  const ol = $("#lotList");
+  ol.style.display = lotOpen ? "block" : "none";
+  ol.innerHTML = "";
+  if(!lotOpen) return;
+  sel.forEach((b,i) => {
+    const li = document.createElement("li");
+    li.style.cssText = "display:flex; align-items:center; gap:8px; padding:6px 0; border-top:1px solid var(--line); font-size:14px";
+    li.innerHTML =
+      '<span style="color:var(--muted); min-width:22px">' + (i+1) + '</span>' +
+      '<span class="grow" style="flex:1">' + esc(b.title) + '</span>' +
+      '<button class="btn sm ghost" data-unlot="' + esc(b.id) + '" aria-label="Retirer de la sélection" style="padding:4px 10px; color:var(--muted)">✕</button>';
+    ol.appendChild(li);
+  });
+}
+$("#lotToggle").onclick = () => { lotOpen = !lotOpen; renderLotList(); };
+$("#lotList").onclick = (e) => {
+  const x = e.target.closest("[data-unlot]");
+  if(!x) return;
+  e.stopPropagation();
+  lot.delete(x.dataset.unlot);
+  renderCat();
+};
+
 $("#lotSell").onclick = async () => {
   const sel = queue().filter(b => lot.has(b.id));
   if(!sel.length) return;
   const desire = sel.reduce((s,b) => s + (b.price || 0), 0);
+  const achat = sel.reduce((s,b) => s + (b.buyPrice || 0), 0);
   const saisi = prompt("Prix total réellement obtenu pour ces " + sel.length +
-    " livres ?\nPrix désiré cumulé : " + eur(desire), String(desire));
+    " livres ?\nPrix désiré cumulé : " + eur(desire) +
+    "\nPrix d'achat cumulé : " + eur(achat), String(desire));
   if(saisi === null) return;
   const total = num(saisi);
   const grp = uid("g"), now = Date.now();
