@@ -879,7 +879,8 @@ async function generate(b, btn){
     const rec = await dbGet("photos", b.id + "_" + i);
     if(!rec) continue;
     saveFile(await variant(rec.blob), base + "_" + String(i+1).padStart(2,"0") + ".jpg");
-    await new Promise(r => setTimeout(r, 420));
+    // Vinted trie à la seconde près : 1,15 s d'écart donne à chaque photo sa propre seconde.
+    if(i < b.photoCount - 1) await new Promise(r => setTimeout(r, 1150));
   }
   btn.disabled = false; btn.textContent = old;
   toast(b.photoCount + " photos dans Téléchargements");
@@ -1997,9 +1998,13 @@ function msgFinal(v){
 }
 let msgPrice = "";
 let msgOpen = -1;
+/* msgVer change à chaque ajout, suppression ou déplacement. L'écran garde la
+   version qu'il affiche : on ne relit l'écran que s'il correspond à la liste. */
+let msgVer = 0;
 function renderMsgs(){
   const host = $("#msgList");
   if(!host) return;
+  host.dataset.ver = String(msgVer);
   const list = settings.msgs || [];
   host.innerHTML = list.map((m, i) => {
     const auPrix = (m.v || "").indexOf("{prix}") >= 0;
@@ -2050,11 +2055,15 @@ async function moveMsg(from, to){
   const l = settings.msgs || [];    // il faut donc la relire APRÈS
   if(to < 0 || to >= l.length) return;
   l.splice(to, 0, l.splice(from, 1)[0]);
+  msgVer++;
   await dbPut("meta", {k:"settings", v:settings});
   renderMsgs();
 }
 async function saveMsgs(){
+  const host = $("#msgList");
+  const ajour = host && host.dataset.ver === String(msgVer);
   settings.msgs = (settings.msgs || []).map((m, i) => {
+    if(!ajour) return m;
     const t = document.querySelector('.msgT[data-i="' + i + '"]');
     const v = document.querySelector('.msgV[data-i="' + i + '"]');
     return {t: t ? t.value : m.t, v: v ? v.value : m.v};
@@ -2143,6 +2152,7 @@ document.addEventListener("click", async (e) => {
     if(!confirm("Supprimer ce message ?")) return;
     await saveMsgs();
     settings.msgs.splice(Number(md.dataset.msgdel), 1);
+    msgVer++;
     await dbPut("meta", {k:"settings", v:settings});
     renderMsgs();
     return;
@@ -2151,6 +2161,7 @@ document.addEventListener("click", async (e) => {
     await saveMsgs();
     settings.msgs = settings.msgs || [];
     settings.msgs.push({t:"Nouveau message", v:""});
+    msgVer++;
     await dbPut("meta", {k:"settings", v:settings});
     msgOpen = settings.msgs.length - 1;
     renderMsgs();
@@ -2474,17 +2485,16 @@ $("#wipe").onclick = async () => {
         corrige = true;
       }
     });
-    const ajouts = [
-    {t:"Favori Le Bon Coin",
-     v:"{salut}, j'ai vu que ce livre vous intéressait. Il est toujours disponible — n'hésitez pas si vous avez une question ou une proposition."},
-    {t:"Évaluation",
-     v:"Merci pour votre achat, tout s'est très bien passé. Bonne lecture ✨"}
-    ];
-    ajouts.forEach(a => {
-      if(!settings.msgs.some(m => (m.t || "") === a.t)){ settings.msgs.push(a); corrige = true; }
+    // Les messages supprimés restent supprimés : plus rien n'est recréé ici.
+    // Doublons strictement identiques (même nom, même texte) : on n'en garde qu'un.
+    const vus = new Set();
+    const avant = settings.msgs.length;
+    settings.msgs = settings.msgs.filter(m => {
+      const k = (m.t || "") + "\u0000" + (m.v || "");
+      if(vus.has(k)) return false;
+      vus.add(k); return true;
     });
-    const iRem = settings.msgs.findIndex(m => /merci pour votre achat 🙂/.test(m.v || ""));
-    if(iRem > 0){ settings.msgs.unshift(settings.msgs.splice(iRem, 1)[0]); corrige = true; }
+    if(settings.msgs.length !== avant) corrige = true;
     if(corrige) await dbPut("meta", {k:"settings", v:settings});
   }
   const ch = await dbGet("meta","cahier2324");
