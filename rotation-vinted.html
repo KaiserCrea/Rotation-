@@ -1615,7 +1615,8 @@ function newBookForm(idx, total){
     '<div class="field"><label class="f">Mots-clés propres à ce livre</label>' +
       '<div class="kwHost">' + kwPickerHTML([]) + '</div></div>' +
     '<div class="field"><label class="f">Photos</label>' +
-      '<input type="file" class="nPhotos" accept="image/*" multiple></div>' +
+      '<input type="file" class="nPhotos" accept="image/*" multiple>' +
+      '<p class="hint nPhotoState" style="margin:6px 0 0"></p></div>' +
   '</div>';
 }
 function openAdd(){
@@ -1685,13 +1686,63 @@ const DRAFT_KEY = "rot.draft";
 function draftRead(){
   try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"); } catch(e){ return null; }
 }
-function draftClear(){ try { localStorage.removeItem(DRAFT_KEY); } catch(e){} }
+function draftClear(){
+  const d = draftRead();
+  if(d && d.lot) (d.livres || []).forEach((l, i) => draftPhotosDel(i, l.photos || 0));
+  try { localStorage.removeItem(DRAFT_KEY); } catch(e){}
+}
+/* Photos d'une saisie de lot en cours : gardées sous « draft_<livre>_<n> »
+   pour qu'une reprise après rechargement les retrouve. */
+function draftPhotosDel(i, n){
+  for(let k = 0; k < n; k++){ try { dbDel("photos", "draft_" + i + "_" + k); } catch(e){} }
+}
+function addCards(){ return $$("#sheetBody .card").filter(c => c.querySelector(".nTitle")); }
+function photoState(c){
+  const st = c.querySelector(".nPhotoState");
+  if(!st) return;
+  const n = (c._photos || []).length, bad = c._photosBad || 0;
+  if(c._photosBusy){ st.textContent = "Préparation des photos… " + c._photosBusy; st.style.color = ""; return; }
+  if(bad){ st.textContent = bad + (bad > 1 ? " photos illisibles" : " photo illisible") +
+             " sur " + (n + bad) + " : resélectionne les photos de ce livre."; st.style.color = "var(--brick)"; return; }
+  st.textContent = n ? n + (n > 1 ? " photos prêtes" : " photo prête") : "";
+  st.style.color = n ? "var(--green)" : "";
+}
+/* Lecture des photos dès leur sélection : Android peut retirer l'accès aux
+   fichiers dès qu'on rouvre la galerie pour un autre livre. */
+async function preparePhotos(inp, n, lotInfo){
+  const c = inp.closest(".card"), idx = addCards().indexOf(c);
+  const files = Array.from(inp.files || []);
+  const ancien = (c._photos || []).length;
+  c._photos = []; c._photosBad = 0;
+  if(!files.length){ photoState(c); return; }
+  const out = [];
+  for(let k = 0; k < files.length; k++){
+    c._photosBusy = (k + 1) + " / " + files.length; photoState(c);
+    try {
+      const blob = await shrink(files[k], settings.maxPx, 0.9);
+      if(!blob || !blob.size) throw new Error("photo vide");
+      out.push(blob);
+    } catch(e){ c._photosBad++; }
+  }
+  c._photosBusy = null;
+  c._photos = out;
+  photoState(c);
+  if(lotInfo && idx >= 0){
+    draftPhotosDel(idx, Math.max(ancien, out.length));
+    for(let k = 0; k < out.length; k++){
+      try { await dbPut("photos", {key:"draft_" + idx + "_" + k, blob:out[k]}); } catch(e){}
+    }
+    c.dataset.photoDraft = out.length;
+    draftSave(n, lotInfo);
+  }
+}
 function draftSave(n, lotInfo){
   try {
     if(!lotInfo){ const ex = draftRead(); if(ex && ex.lot) return; }
-    const cards = $$("#sheetBody .card").filter(c => c.querySelector(".nTitle"));
+    const cards = addCards();
     if(!cards.length) return;
     const d = {n:n, lot:lotInfo || null, livres: cards.map(c => ({
+      photos: lotInfo ? Number(c.dataset.photoDraft || 0) : 0,
       title: c.querySelector(".nTitle").value,
       desc:  c.querySelector(".nDesc").value,
       buy:   c.querySelector(".nBuy").value,
@@ -1702,13 +1753,28 @@ function draftSave(n, lotInfo){
       tags:  kwSelected(c.querySelector(".kwHost"))
     }))};
     const vide = d.livres.every(l =>
-      !l.title && !l.desc && !l.price && !l.isbn && !l.theme && !l.tags.length);
+      !l.title && !l.desc && !l.price && !l.isbn && !l.theme && !l.tags.length && !l.photos);
     if(vide){ draftClear(); return; }
     localStorage.setItem(DRAFT_KEY, JSON.stringify(d));
   } catch(e){}
 }
+async function draftApplyPhotos(d){
+  const cards = addCards();
+  for(let i = 0; i < (d.livres || []).length; i++){
+    const c = cards[i], n = (d.livres[i] || {}).photos || 0;
+    if(!c || !n) continue;
+    const out = [];
+    for(let k = 0; k < n; k++){
+      try { const r = await dbGet("photos", "draft_" + i + "_" + k); if(r && r.blob && r.blob.size) out.push(r.blob); } catch(e){}
+    }
+    c._photos = out; c._photosBad = 0;
+    c.dataset.photoDraft = out.length;
+    photoState(c);
+  }
+}
 function draftApply(d){
-  const cards = $$("#sheetBody .card").filter(c => c.querySelector(".nTitle"));
+  draftApplyPhotos(d);
+  const cards = addCards();
   (d.livres || []).forEach((l, i) => {
     const c = cards[i];
     if(!c) return;
@@ -1729,6 +1795,7 @@ function draftApply(d){
 }
 function wireAddForms(n, lotInfo){
   $$(".kwHost").forEach(h => wireKwPicker(h));
+  $$("#sheetBody .nPhotos").forEach(inp => { inp.onchange = () => preparePhotos(inp, n, lotInfo); });
   $("#sheetBody").oninput = () => draftSave(n, lotInfo);
   $$(".nNoIsbn").forEach(btn => {
     btn.onclick = () => { btn.parentNode.querySelector(".nIsbn").value = settings.defaultIsbn; };
@@ -1756,8 +1823,14 @@ function wireAddForms(n, lotInfo){
       )) return;
     }
 
+    if(cards.some(c => c._photosBusy)){ toast("Photos en cours de préparation, patiente un instant."); return; }
+    const bad = cards.findIndex(c => c._photosBad);
+    if(bad >= 0){
+      alert("Des photos de « " + titles[bad] + " » sont illisibles.\nResélectionne les photos de ce livre, puis réessaie.");
+      return;
+    }
     const sansPhoto = cards
-      .map((c, i) => ((c.querySelector(".nPhotos").files || []).length ? null : (titles[i] || "livre " + (i+1))))
+      .map((c, i) => ((c._photos || []).length ? null : (titles[i] || "livre " + (i+1))))
       .filter(Boolean);
     if(sansPhoto.length){
       const liste = sansPhoto.slice(0, 6).map(t => "\u2022 " + t).join("\n") +
@@ -1775,11 +1848,10 @@ function wireAddForms(n, lotInfo){
     const added = [];
     for(let i = 0; i < cards.length; i++){
       const c = cards[i], id = uid("n");
-      const files = Array.from(c.querySelector(".nPhotos").files || []);
+      const pretes = c._photos || [];
       let k = 0, perdues = 0;
-      for(const f of files){
+      for(const blob of pretes){
         try{
-          const blob = await shrink(f, settings.maxPx, 0.9);
           if(!blob || !blob.size) throw new Error("photo vide");
           await dbPut("photos", {key:id + "_" + k, blob:blob});
           const relu = await dbGet("photos", id + "_" + k);      // on relit pour vérifier
