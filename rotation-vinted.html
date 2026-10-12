@@ -16,9 +16,9 @@
   --sans: system-ui, -apple-system, "Roboto", "Segoe UI", sans-serif;
 }
 *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
-html,body{margin:0;padding:0}
+html,body{margin:0;padding:0; overscroll-behavior-y:none}
 body{background:var(--bg); color:var(--text); font-family:var(--sans);
-  font-size:16px; line-height:1.5; padding-bottom:40px; overscroll-behavior-y:contain}
+  font-size:16px; line-height:1.5; padding-bottom:40px; overscroll-behavior-y:none}
 h1,h2,h3{margin:0; font-weight:600}
 button{font-family:inherit; font-size:16px; cursor:pointer; border:0; color:inherit; background:none}
 input,textarea,select{font-family:inherit; font-size:16px; color:var(--text);
@@ -1628,7 +1628,7 @@ function openAdd(){
   document.body.style.overflow = "hidden";
   wireAddForms(1);
 }
-function openAddLot(){
+function openAddLot(reprise){
   $("#sheetTick").textContent = "Nouveau lot";
   $("#sheetBody").innerHTML =
     '<h2 class="title" style="font-size:22px; margin-bottom:8px">Ajouter un lot</h2>' +
@@ -1656,6 +1656,7 @@ function openAddLot(){
   $("#lotTotal").oninput = upd;
   $("#lotCount").oninput = upd;
 
+  let auto = !!reprise;   // reprise acceptée au démarrage : pas de seconde question
   $("#lotNext").onclick = () => {
     const t = num($("#lotTotal").value), n = parseInt($("#lotCount").value, 10);
     if(!t || !(n > 0)){ toast("Indiquez le prix total et le nombre de livres."); return; }
@@ -1667,11 +1668,18 @@ function openAddLot(){
     $$("#lotForms .nBuy").forEach(inp => { inp.value = unit.toFixed(2); });
     wireAddForms(n, {amount:t, count:n});
     const d = draftRead();
-    if(d && d.n === n && confirm("Une saisie non terminée a été retrouvée. La reprendre ?")) draftApply(d);
+    if(d && d.n === n && (auto || confirm("Une saisie non terminée a été retrouvée. La reprendre ?"))) draftApply(d);
     else draftClear();
+    auto = false;
     $("#lotNext").disabled = true;
     $("#lotForms").scrollIntoView({behavior:"smooth", block:"start"});
   };
+  if(reprise && reprise.lot){
+    $("#lotTotal").value = String(reprise.lot.amount).replace(".", ",");
+    $("#lotCount").value = reprise.lot.count;
+    upd();
+    $("#lotNext").click();
+  }
 }
 const DRAFT_KEY = "rot.draft";
 function draftRead(){
@@ -1680,6 +1688,7 @@ function draftRead(){
 function draftClear(){ try { localStorage.removeItem(DRAFT_KEY); } catch(e){} }
 function draftSave(n, lotInfo){
   try {
+    if(!lotInfo){ const ex = draftRead(); if(ex && ex.lot) return; }
     const cards = $$("#sheetBody .card").filter(c => c.querySelector(".nTitle"));
     if(!cards.length) return;
     const d = {n:n, lot:lotInfo || null, livres: cards.map(c => ({
@@ -2523,6 +2532,21 @@ $("#wipe").onclick = async () => {
     const t = localStorage.getItem("rot.tab");
     if(t && t !== "today" && $("#" + t)) showTab(t, true);
   } catch(e){}
+
+  /* Saisie de lot interrompue (rechargement, fermeture) : on propose de la reprendre. */
+  const dl0 = draftRead();
+  if(dl0 && dl0.lot && dl0.lot.count > 0){
+    setTimeout(() => {
+      if(confirm("Une saisie de lot non terminée a été retrouvée :\n" +
+                 dl0.lot.count + " livres, " + eur(dl0.lot.amount) + ".\n\n" +
+                 "La reprendre maintenant ? Les photos seront à resélectionner.")){
+        showTab("cat");
+        openAddLot(dl0);
+      } else if(confirm("Supprimer définitivement cette saisie ?\n\nAnnuler la garde pour plus tard.")){
+        draftClear();
+      }
+    }, 400);
+  }
 })();
 
 /* =====================================================================
