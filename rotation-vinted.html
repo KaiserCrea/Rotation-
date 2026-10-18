@@ -1281,7 +1281,19 @@ function toggle(btn, box, labelOpen, labelShut){
 }
 let sheetScrollY = 0;
 let sheetFromCat = false;
+let sheetMode = null;   // "add" ou "lot" quand la fiche est une saisie
+function saisieEnCours(){
+  if(!sheetMode || !$("#sheet").classList.contains("on")) return false;
+  const vals = $$("#sheetBody input, #sheetBody textarea")
+    .filter(x => x.type !== "file" && !x.readOnly)
+    .some(x => (x.value || "").trim());
+  const photos = addCards().some(c => (c._photos || []).length);
+  const tags = $$("#sheetBody .kw.on").length > 0;
+  return vals || photos || tags;
+}
+const MSG_QUITTER = "Ta saisie n'est pas enregistrée.\n\nQuitter quand même ? Elle restera en brouillon et te sera proposée à la prochaine ouverture.";
 function openSheet(){
+  sheetMode = null;
   sheetScrollY = window.scrollY || window.pageYOffset || 0;
   sheetFromCat = !!($("#cat") && $("#cat").classList.contains("on"));
   $("#sheet").classList.add("on");
@@ -1552,23 +1564,27 @@ function closeSheet(){
 }
 
 /* ---------- scan du code-barres ---------- */
-let scanStream = null, scanTimer = null, scanBox = null, scanOpen = false;
+let scanStream = null, scanTimer = null, scanBox = null, scanOpen = false, scanGen = 0;
 async function startScan(input){
   if(!("BarcodeDetector" in window)){
     toast("Ce navigateur ne sait pas lire les codes-barres. Saisissez l'ISBN à la main.");
     return;
   }
-  stopScan();
-  try{ scanStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}}); }
-  catch(e){ toast("Accès à la caméra refusé."); return; }
+  if(scanOpen) return;                 // déjà en cours d'ouverture ou ouvert : on ignore
+  scanOpen = true;
+  pushState();
+  const gen = ++scanGen;
+  let flux;
+  try{ flux = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}}); }
+  catch(e){ if(gen === scanGen) stopScan(); toast("Accès à la caméra refusé."); return; }
+  if(gen !== scanGen || !scanOpen){ flux.getTracks().forEach(t => t.stop()); return; }  // annulé entre-temps
+  scanStream = flux;
   scanBox = document.createElement("div");
   scanBox.style.marginTop = "10px";
   scanBox.innerHTML = '<video playsinline muted style="width:100%;border-radius:8px;background:#000"></video>' +
     '<button class="btn sm block ghost" type="button" style="margin-top:8px">Arrêter</button>';
   input.parentNode.parentNode.appendChild(scanBox);
-  scanBox.querySelector("button").onclick = stopScan;
-  scanOpen = true;
-  pushState();
+  scanBox.querySelector("button").onclick = () => stopScan();
   const v = scanBox.querySelector("video");
   v.srcObject = scanStream; await v.play();
   const det = new window.BarcodeDetector({formats:["ean_13","ean_8","upc_a"]});
@@ -1577,16 +1593,25 @@ async function startScan(input){
       const codes = await det.detect(v);
       if(codes && codes.length){
         const n = isbnNormalise(codes[0].rawValue);
-        if(n.value){ input.value = n.value; stopScan(); toast("ISBN " + n.value); }
+        if(n.value){ input.value = n.value; input.dispatchEvent(new Event("input", {bubbles:true})); stopScan(); toast("ISBN " + n.value); }
       }
     }catch(e){}
   }, 400);
 }
-function stopScan(){
+function stopScan(fromPop){
+  const etaitOuvert = scanOpen;
   scanOpen = false;
+  scanGen++;
   clearInterval(scanTimer); scanTimer = null;
   if(scanStream){ scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
   if(scanBox){ scanBox.remove(); scanBox = null; }
+  // filet de sécurité : aucune vidéo de scanner ne doit rester à l'écran
+  $$("#sheetBody video").forEach(v => {
+    try { (v.srcObject && v.srcObject.getTracks ? v.srcObject.getTracks() : []).forEach(t => t.stop()); } catch(e){}
+    const box = v.parentNode; if(box && box.parentNode) box.remove();
+  });
+  // fermé par le bouton Arrêter ou par une lecture réussie : on retire l'entrée d'historique du scanner
+  if(etaitOuvert && !fromPop){ ignorePop++; history.back(); }
 }
 
 /* =====================================================================
@@ -1625,9 +1650,18 @@ function openAdd(){
     '<h2 class="title" style="font-size:22px; margin-bottom:16px">Ajouter un livre</h2>' +
     newBookForm(1,1) +
     '<button class="btn main block" id="nSave" style="margin-top:14px">Ajouter au catalogue</button>';
-  $("#sheet").classList.add("on");
-  document.body.style.overflow = "hidden";
+  openSheet();
+  sheetMode = "add";
   wireAddForms(1);
+  const d = draftRead("livre");
+  if(d && (d.livres || []).length){
+    const t = (d.livres[0].title || "").trim();
+    setTimeout(() => {
+      if(confirm("Une saisie de livre non terminée a été retrouvée" + (t ? " :\n« " + t + " »" : "") +
+                 ".\n\nLa reprendre ?")) draftApply(d);
+      else draftClear("livre");
+    }, 50);
+  }
 }
 function openAddLot(reprise){
   $("#sheetTick").textContent = "Nouveau lot";
@@ -1645,8 +1679,8 @@ function openAddLot(reprise){
     '<p class="hint" id="lotUnit" style="margin-top:10px"></p>' +
     '<button class="btn main block" id="lotNext" style="margin-top:12px">Saisir les livres</button></div>' +
     '<div id="lotForms"></div>';
-  $("#sheet").classList.add("on");
-  document.body.style.overflow = "hidden";
+  openSheet();
+  sheetMode = "lot";
 
   const upd = () => {
     const t = num($("#lotTotal").value), n = parseInt($("#lotCount").value, 10);
@@ -1682,19 +1716,24 @@ function openAddLot(reprise){
     $("#lotNext").click();
   }
 }
-const DRAFT_KEY = "rot.draft";
-function draftRead(){
-  try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"); } catch(e){ return null; }
+/* Deux brouillons séparés : un pour le lot, un pour le livre seul. */
+const DRAFT_KEYS = {lot:"rot.draft", livre:"rot.draft.livre"};
+const DRAFT_PH   = {lot:"draft_",    livre:"draft1_"};
+function kindOf(lotInfo){ return lotInfo ? "lot" : "livre"; }
+function draftRead(kind){
+  kind = kind || "lot";
+  try { return JSON.parse(localStorage.getItem(DRAFT_KEYS[kind]) || "null"); } catch(e){ return null; }
 }
-function draftClear(){
-  const d = draftRead();
-  if(d && d.lot) (d.livres || []).forEach((l, i) => draftPhotosDel(i, l.photos || 0));
-  try { localStorage.removeItem(DRAFT_KEY); } catch(e){}
+function draftClear(kind){
+  kind = kind || "lot";
+  const d = draftRead(kind);
+  if(d) (d.livres || []).forEach((l, i) => draftPhotosDel(kind, i, l.photos || 0));
+  try { localStorage.removeItem(DRAFT_KEYS[kind]); } catch(e){}
 }
 /* Photos d'une saisie de lot en cours : gardées sous « draft_<livre>_<n> »
    pour qu'une reprise après rechargement les retrouve. */
-function draftPhotosDel(i, n){
-  for(let k = 0; k < n; k++){ try { dbDel("photos", "draft_" + i + "_" + k); } catch(e){} }
+function draftPhotosDel(kind, i, n){
+  for(let k = 0; k < n; k++){ try { dbDel("photos", DRAFT_PH[kind] + i + "_" + k); } catch(e){} }
 }
 function addCards(){ return $$("#sheetBody .card").filter(c => c.querySelector(".nTitle")); }
 function photoState(c){
@@ -1727,10 +1766,11 @@ async function preparePhotos(inp, n, lotInfo){
   c._photosBusy = null;
   c._photos = out;
   photoState(c);
-  if(lotInfo && idx >= 0){
-    draftPhotosDel(idx, Math.max(ancien, out.length));
+  if(idx >= 0){
+    const kind = kindOf(lotInfo);
+    draftPhotosDel(kind, idx, Math.max(ancien, out.length));
     for(let k = 0; k < out.length; k++){
-      try { await dbPut("photos", {key:"draft_" + idx + "_" + k, blob:out[k]}); } catch(e){}
+      try { await dbPut("photos", {key:DRAFT_PH[kind] + idx + "_" + k, blob:out[k]}); } catch(e){}
     }
     c.dataset.photoDraft = out.length;
     draftSave(n, lotInfo);
@@ -1738,11 +1778,10 @@ async function preparePhotos(inp, n, lotInfo){
 }
 function draftSave(n, lotInfo){
   try {
-    if(!lotInfo){ const ex = draftRead(); if(ex && ex.lot) return; }
     const cards = addCards();
     if(!cards.length) return;
     const d = {n:n, lot:lotInfo || null, livres: cards.map(c => ({
-      photos: lotInfo ? Number(c.dataset.photoDraft || 0) : 0,
+      photos: Number(c.dataset.photoDraft || 0),
       title: c.querySelector(".nTitle").value,
       desc:  c.querySelector(".nDesc").value,
       buy:   c.querySelector(".nBuy").value,
@@ -1754,8 +1793,8 @@ function draftSave(n, lotInfo){
     }))};
     const vide = d.livres.every(l =>
       !l.title && !l.desc && !l.price && !l.isbn && !l.theme && !l.tags.length && !l.photos);
-    if(vide){ draftClear(); return; }
-    localStorage.setItem(DRAFT_KEY, JSON.stringify(d));
+    if(vide){ draftClear(kindOf(lotInfo)); return; }
+    localStorage.setItem(DRAFT_KEYS[kindOf(lotInfo)], JSON.stringify(d));
   } catch(e){}
 }
 async function draftApplyPhotos(d){
@@ -1765,7 +1804,7 @@ async function draftApplyPhotos(d){
     if(!c || !n) continue;
     const out = [];
     for(let k = 0; k < n; k++){
-      try { const r = await dbGet("photos", "draft_" + i + "_" + k); if(r && r.blob && r.blob.size) out.push(r.blob); } catch(e){}
+      try { const r = await dbGet("photos", DRAFT_PH[kindOf(d.lot)] + i + "_" + k); if(r && r.blob && r.blob.size) out.push(r.blob); } catch(e){}
     }
     c._photos = out; c._photosBad = 0;
     c.dataset.photoDraft = out.length;
@@ -1797,8 +1836,9 @@ function wireAddForms(n, lotInfo){
   $$(".kwHost").forEach(h => wireKwPicker(h));
   $$("#sheetBody .nPhotos").forEach(inp => { inp.onchange = () => preparePhotos(inp, n, lotInfo); });
   $("#sheetBody").oninput = () => draftSave(n, lotInfo);
+  $("#sheetBody").onclick = (e) => { if(e.target.closest(".kw, .pill, #kwAdd")) setTimeout(() => draftSave(n, lotInfo), 0); };
   $$(".nNoIsbn").forEach(btn => {
-    btn.onclick = () => { btn.parentNode.querySelector(".nIsbn").value = settings.defaultIsbn; };
+    btn.onclick = () => { const i = btn.parentNode.querySelector(".nIsbn"); i.value = settings.defaultIsbn; i.dispatchEvent(new Event("input", {bubbles:true})); };
   });
   $$(".nScan").forEach(btn => {
     btn.onclick = () => startScan(btn.parentNode.querySelector(".nIsbn"));
@@ -1897,7 +1937,8 @@ function wireAddForms(n, lotInfo){
       await dbPut("purchases", p);
       purchases.push(p);
     }
-    draftClear();
+    draftClear(kindOf(lotInfo));
+    sheetMode = null;
     closeSheet();
     toast(added.length > 1 ? added.length + " livres ajoutés" : "Livre ajouté");
   };
@@ -2215,9 +2256,15 @@ let navDepth = 0;
 function pushState(){
   history.pushState({app:++navDepth}, "");
 }
+let ignorePop = 0;
 window.addEventListener("popstate", () => {
-  if(scanOpen){ stopScan(); return; }
-  if($("#sheet").classList.contains("on")){ closeSheet(); return; }
+  if(ignorePop > 0){ ignorePop--; return; }
+  if(scanOpen){ stopScan(true); return; }
+  if($("#sheet").classList.contains("on")){
+    if(saisieEnCours() && !confirm(MSG_QUITTER)){ pushState(); return; }
+    sheetMode = null;
+    closeSheet(); return;
+  }
   const cur = $$("main section").find(s => s.classList.contains("on"));
   if(cur && cur.id !== "today"){ showTab("today", true); return; }
   // déjà sur l'accueil : Android referme la page
@@ -2439,7 +2486,11 @@ document.addEventListener("click", async (e) => {
   }
 });
 
-$("#closeSheet").onclick = closeSheet;
+$("#closeSheet").onclick = () => {
+  if(saisieEnCours() && !confirm(MSG_QUITTER)) return;
+  sheetMode = null;
+  history.back();          // retire l'entrée d'historique de la fiche ; popstate la ferme
+};
 $("#addBtn").onclick = openAdd;
 $("#addLotBtn").onclick = openAddLot;
 $("#search").oninput = renderCat;
