@@ -466,6 +466,23 @@ let lastBackup = 0;
 let dayExtra = 0;   // rechargé depuis daily.extra
 const openYears = new Set();
 const lot = new Set();
+/* La sélection du Catalogue est gardée sur le téléphone : elle survit à la
+   fermeture de l'appli et ne s'efface qu'avec Annuler, la vente ou la priorité. */
+const LOT_KEY = "rot.selection";
+let lotPret = false;          // pas d'écriture avant la relecture au démarrage
+function lotSave(){
+  if(!lotPret) return;
+  try { localStorage.setItem(LOT_KEY, JSON.stringify(Array.from(lot))); } catch(e){}
+}
+function lotLoad(){
+  try {
+    const ids = JSON.parse(localStorage.getItem(LOT_KEY) || "[]");
+    const enStock = new Set(inStock().map(b => b.id));
+    (Array.isArray(ids) ? ids : []).forEach(id => { if(enStock.has(id)) lot.add(id); });
+  } catch(e){}
+  lotPret = true;
+  lotSave();                  // retire ce qui a été vendu ou supprimé entre-temps
+}
 let themeFilter = null;
 
 /* =====================================================================
@@ -1039,6 +1056,11 @@ function renderDay(){
   }
 }
 function renderCat(){
+  if(lotPret){
+    const enStock = new Set(inStock().map(b => b.id));
+    Array.from(lot).forEach(id => { if(!enStock.has(id)) lot.delete(id); });
+    lotSave();
+  }
   const stock = inStock().concat(inReserve());
   const invested = stock.reduce((s,b) => s + (b.buyPrice || 0), 0);
   const desired  = stock.reduce((s,b) => s + (b.price || 0), 0);
@@ -2686,6 +2708,7 @@ $("#wipe").onclick = async () => {
     if(maj.length) await dbPutMany("books", maj);
     await dbPut("meta", {k:"freshMark", v:true});
   }
+  lotLoad();
   fillSettings(); render();
   try {
     const t = localStorage.getItem("rot.tab");
