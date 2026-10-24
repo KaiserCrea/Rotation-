@@ -1641,7 +1641,7 @@ function stopScan(fromPop){
    ===================================================================== */
 function newBookForm(idx, total){
   return '<div class="card">' +
-    (total > 1 ? '<div class="hint" style="margin-bottom:10px">Livre ' + idx + ' sur ' + total + '</div>' : '') +
+    (total > 1 ? '<div class="hint nRang" style="margin-bottom:10px">Livre ' + idx + ' sur ' + total + '</div>' : '') +
     '<div class="field"><label class="f">Titre</label><input class="nTitle" placeholder="Titre — Auteur"></div>' +
     '<div class="field"><label class="f">Description</label><textarea class="nDesc" rows="5"></textarea></div>' +
     '<div class="two">' +
@@ -1713,6 +1713,49 @@ function openAddLot(reprise){
   $("#lotTotal").oninput = upd;
   $("#lotCount").oninput = upd;
 
+  /* Nombre de livres ou prix total changé après « Saisir les livres » :
+     on ajoute ou retire des cases à la fin et on recalcule le prix de chacun. */
+  let info = null;
+  const ajuster = () => {
+    const cards = addCards();
+    if(!info || !cards.length) return;
+    const t = num($("#lotTotal").value), n = parseInt($("#lotCount").value, 10);
+    if(!t || !(n > 0)){ toast("Indiquez le prix total et le nombre de livres."); return; }
+    const cur = cards.length;
+    if(n < cur){
+      const enTrop = cards.slice(n);
+      const remplis = enTrop.filter(c =>
+        Array.from(c.querySelectorAll("input, textarea")).some(x => x.type !== "file" && !x.readOnly && x.id !== "kwNew" && (x.value || "").trim()) ||
+        (c._photos || []).length || c.querySelector(".kw.on"));
+      if(remplis.length && !confirm(
+          (remplis.length > 1 ? remplis.length + " des livres à retirer sont déjà remplis." : "Un des livres à retirer est déjà rempli.") +
+          "\n\nPasser à " + n + " livres et supprimer les livres " + (n + 1) + " à " + cur + " ?")){
+        $("#lotCount").value = cur; upd(); return;
+      }
+      enTrop.forEach((c, k) => { draftPhotosDel("lot", n + k, Number(c.dataset.photoDraft || 0)); c.remove(); });
+    } else if(n > cur){
+      let h = "";
+      for(let i = cur + 1; i <= n; i++) h += newBookForm(i, n);
+      $("#nSave").insertAdjacentHTML("beforebegin", h);
+    }
+    const unit = (t / n).toFixed(2);
+    addCards().forEach((c, i) => {
+      let r = c.querySelector(".nRang");
+      if(!r){ r = document.createElement("div"); r.className = "hint nRang"; r.style.marginBottom = "10px"; c.prepend(r); }
+      r.textContent = "Livre " + (i + 1) + " sur " + n;
+      const b = c.querySelector(".nBuy");
+      b.value = unit; b.readOnly = n > 1;
+    });
+    info.amount = t; info.count = n;
+    $("#nSave").textContent = "Ajouter les " + n + " livres";
+    wireAddForms(n, info);
+    draftSave(n, info);
+    if(n !== cur) toast(n > cur ? (n - cur) + (n - cur > 1 ? " livres ajoutés à la fin" : " livre ajouté à la fin")
+                                : (cur - n) + (cur - n > 1 ? " livres retirés" : " livre retiré"));
+  };
+  $("#lotTotal").onchange = ajuster;
+  $("#lotCount").onchange = ajuster;
+
   let auto = !!reprise;   // reprise acceptée au démarrage : pas de seconde question
   $("#lotNext").onclick = () => {
     const t = num($("#lotTotal").value), n = parseInt($("#lotCount").value, 10);
@@ -1723,7 +1766,8 @@ function openAddLot(reprise){
     h += '<button class="btn main block" id="nSave" style="margin:14px 0 30px">Ajouter les ' + n + ' livres</button>';
     $("#lotForms").innerHTML = h;
     $$("#lotForms .nBuy").forEach(inp => { inp.value = unit.toFixed(2); });
-    wireAddForms(n, {amount:t, count:n});
+    info = {amount:t, count:n};
+    wireAddForms(n, info);
     const d = draftRead();
     if(d && d.n === n && (auto || confirm("Une saisie non terminée a été retrouvée. La reprendre ?"))) draftApply(d);
     else draftClear();
@@ -1802,7 +1846,7 @@ function draftSave(n, lotInfo){
   try {
     const cards = addCards();
     if(!cards.length) return;
-    const d = {n:n, lot:lotInfo || null, livres: cards.map(c => ({
+    const d = {n: lotInfo ? lotInfo.count : n, lot:lotInfo || null, livres: cards.map(c => ({
       photos: Number(c.dataset.photoDraft || 0),
       title: c.querySelector(".nTitle").value,
       desc:  c.querySelector(".nDesc").value,
@@ -1855,7 +1899,7 @@ function draftApply(d){
   });
 }
 function wireAddForms(n, lotInfo){
-  $$(".kwHost").forEach(h => wireKwPicker(h));
+  $$(".kwHost").forEach(h => { if(h.dataset.wired) return; h.dataset.wired = "1"; wireKwPicker(h); });
   $$("#sheetBody .nPhotos").forEach(inp => { inp.onchange = () => preparePhotos(inp, n, lotInfo); });
   $("#sheetBody").oninput = () => draftSave(n, lotInfo);
   $("#sheetBody").onclick = (e) => { if(e.target.closest(".kw, .pill, #kwAdd")) setTimeout(() => draftSave(n, lotInfo), 0); };
