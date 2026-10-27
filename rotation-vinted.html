@@ -356,6 +356,12 @@ progress{width:100%; height:8px}
   </div>
 
   <div class="card">
+    <h2 style="font-size:16px">Versements de la retraite</h2>
+    <p class="hint" style="margin:4px 0 10px">Le mois du Bilan change le jour du versement. Sans date saisie, il change le 28.</p>
+    <div id="versList"></div>
+  </div>
+
+  <div class="card">
     <h2 style="font-size:16px">Sauvegarde</h2>
     <p class="hint" style="margin:6px 0 12px">
       Tout vit dans ce navigateur. Vider les données de Chrome effacerait le catalogue et les bilans.
@@ -449,6 +455,7 @@ let books = [], sales = [], purchases = [];
 let settings = {
   signature:"", pool:POOL_DEFAULT.slice(), poolTake:12,
   lbcTags:["#spirituel","#spiritualité","#ésotérisme","#ésotérique","#developpement"],
+  versements:{"2026-09":"2026-09-29", "2026-10":"2026-10-29", "2026-11":"2026-11-27", "2026-12":"2026-12-23"},
   defaultIsbn:"9782951245020", perDay:6, maxPx:1400, customKw:[], dormantM:6,
   msgs:[
     {t:"Remerciement",
@@ -517,11 +524,21 @@ function dayKey(ts){
   return d.getFullYear() + "-" + p(d.getMonth()+1) + "-" + p(d.getDate());
 }
 function monthKey(ts){ return dayKey(ts).slice(0,7); }
-/* Période comptable : du 27 au 26. Une période porte le nom du mois où elle
-   se termine (du 27 août au 26 septembre = septembre). */
+/* Période comptable.
+   Jusqu'au 28 octobre 2026 inclus : ancienne règle, le mois change le 27
+   (octobre 2026 = 27 sept. → 26 oct. ; les 27 et 28 oct. comptent pour novembre).
+   À partir du 29 octobre 2026 : le mois change le jour du versement de la retraite,
+   saisi dans les Réglages ; sans date saisie pour un mois, il change le 28.
+   Une période porte le nom du mois où elle se termine. */
+const BASCULE_VERSEMENTS = new Date(2026, 9, 29).getTime();
+function jourVersement(ym){
+  const v = (settings.versements || {})[ym];
+  return (v && v.slice(0, 7) === ym) ? Number(v.slice(8, 10)) : 28;
+}
 function periodKey(ts){
   const d = ts ? new Date(ts) : new Date();
-  if(d.getDate() >= 27) d.setDate(1), d.setMonth(d.getMonth() + 1);
+  const seuil = d.getTime() < BASCULE_VERSEMENTS ? 27 : jourVersement(monthKey(d.getTime()));
+  if(d.getDate() >= seuil) d.setDate(1), d.setMonth(d.getMonth() + 1);
   return monthKey(d.getTime());
 }
 /* Les mois d'historique importés (count à 0) sont déjà des périodes du 27 :
@@ -2294,7 +2311,45 @@ async function saveMsgs(){
   });
   await msgsWrite();
 }
+/* Une ligne par mois, de septembre 2026 à décembre de l'année prochaine. */
+function fillVersements(){
+  const host = $("#versList");
+  if(!host) return;
+  const finAn = new Date().getFullYear() + 1;
+  const lignes = [];
+  for(let y = 2026; y <= Math.max(2027, finAn); y++){
+    for(let m = (y === 2026 ? 9 : 1); m <= 12; m++){
+      const ym = y + "-" + String(m).padStart(2, "0");
+      const suiv = m === 12 ? (y + 1) + "-01" : y + "-" + String(m + 1).padStart(2, "0");
+      const der = new Date(y, m, 0).getDate();
+      lignes.push(
+        '<div class="row" style="justify-content:space-between; gap:10px; padding:6px 0; border-top:1px solid var(--line)">' +
+          '<span style="font-size:14px">' + monthLabel(ym) +
+            ' <span class="hint">· ouvre ' + monthLabel(suiv).split(" ")[0] + '</span></span>' +
+          '<input type="date" class="versDate" data-ym="' + ym + '" min="' + ym + '-01" max="' + ym + '-' + der + '"' +
+            ' value="' + esc((settings.versements || {})[ym] || "") + '" style="width:auto; max-width:170px">' +
+        '</div>');
+    }
+  }
+  host.innerHTML = lignes.join("");
+  $$(".versDate").forEach(inp => {
+    inp.onchange = async () => {
+      const ym = inp.dataset.ym, v = inp.value;
+      settings.versements = settings.versements || {};
+      if(v && v.slice(0, 7) !== ym){
+        alert("La date de versement de " + monthLabel(ym) + " doit tomber en " + monthLabel(ym) + ".");
+        inp.value = settings.versements[ym] || "";
+        return;
+      }
+      if(v) settings.versements[ym] = v; else delete settings.versements[ym];
+      await dbPut("meta", {k:"settings", v:settings});
+      render();
+      toast(v ? "Versement de " + monthLabel(ym) + " enregistré" : "Versement de " + monthLabel(ym) + " effacé : le mois changera le 28");
+    };
+  });
+}
 function fillSettings(){
+  fillVersements();
   fillHist();
   $("#perDay").value = settings.perDay || 6;
   $("#sig").value = settings.signature || "";
