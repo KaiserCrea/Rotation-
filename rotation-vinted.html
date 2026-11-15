@@ -783,6 +783,36 @@ function normTitre(t){
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, " ").trim();
 }
+/* ---------- titres proches : repérer un second exemplaire ---------- */
+const MOTS_VIDES = new Set(("le la les l un une des de du d et ou a au aux en sur pour par avec sans dans " +
+  "ce cet cette ces son sa ses leur leurs qui que quoi est sont se s n ne pas plus tome t vol volume " +
+  "livre livres lot edition editions ed the of and to in").split(" "));
+function motsTitre(t){
+  return normTitre(t).split(" ").filter(w => w.length > 1 && !MOTS_VIDES.has(w) && !/^\d+$/.test(w));
+}
+function titresProches(t1, t2){
+  const a = normTitre(t1), b = normTitre(t2);
+  if(!a || !b) return false;
+  if(a === b) return true;
+  // « tome 1 » et « tome 2 » ne sont pas le même livre
+  const na = (a.match(/\b\d+\b/g) || []).join(","), nb = (b.match(/\b\d+\b/g) || []).join(",");
+  if(na && nb && na !== nb) return false;
+  const court = a.length <= b.length ? a : b, long = a.length <= b.length ? b : a;
+  if(court.length >= 8 && (" " + long + " ").indexOf(" " + court + " ") >= 0) return true;
+  const ma = new Set(motsTitre(t1)), mb = new Set(motsTitre(t2));
+  if(ma.size < 2 || mb.size < 2) return false;
+  let com = 0; ma.forEach(w => { if(mb.has(w)) com++; });
+  return com >= 2 && com / Math.min(ma.size, mb.size) >= 0.75;
+}
+function isbnUtile(v){
+  const n = isbnNormalise(v || "").value || isbnClean(v || "");
+  return (n && n.length >= 10 && n !== settings.defaultIsbn) ? n : "";
+}
+function memeLivre(t1, i1, t2, i2){
+  const a = isbnUtile(i1), b = isbnUtile(i2);
+  if(a && b && a === b) return true;
+  return titresProches(t1, t2);
+}
 function pending(){ return books.filter(b => b.status === "pending"); }
 function dormantSince(b){
   const n = settings.dormantM || 0;
@@ -2021,19 +2051,28 @@ function wireAddForms(n, lotInfo){
     const titles = cards.map(c => c.querySelector(".nTitle").value.trim());
     if(titles.some(t => !t)){ toast("Il manque un titre."); return; }
 
-    const deja = [];
+    // doublons : au catalogue (titre proche ou même ISBN) et à l'intérieur de cette saisie
+    const isbns = cards.map(c => c.querySelector(".nIsbn").value);
+    const proches = [];   // {i, avec:[titres], ou:"catalogue"|"saisie"}
     titles.forEach((t, i) => {
-      const n = normTitre(t);
-      if(!n) return;
-      if(books.some(b => (b.status || "stock") !== "pending" && normTitre(b.title) === n)) deja.push(t);
+      const cat = books.filter(b => (b.status || "stock") !== "pending" && memeLivre(t, isbns[i], b.title, b.isbn))
+        .map(b => b.title + (b.status === "reserve" ? " (en réserve)" : ""));
+      const saisie = [];
+      for(let j = 0; j < i; j++) if(memeLivre(t, isbns[i], titles[j], isbns[j])) saisie.push(titles[j]);
+      if(cat.length) proches.push({i:i, avec:cat.slice(0, 4), ou:"catalogue"});
+      else if(saisie.length) proches.push({i:i, avec:saisie.slice(0, 2), ou:"saisie"});
     });
-    if(deja.length){
-      if(!confirm(
-        (deja.length > 1 ? "Ces titres existent déjà au catalogue :" : "Ce titre existe déjà au catalogue :") +
-        "\n\n\u2022 " + deja.join("\n\u2022 ") +
-        "\n\nSi c'est un second exemplaire, enregistre et pense à en mettre un en réserve.\n\n" +
-        "Enregistrer quand même ?"
-      )) return;
+    const enReserve = new Set();
+    if(proches.length){
+      const liste = proches.map(p => "\u2022 " + titles[p.i] + "\n    \u2192 " +
+        (p.ou === "catalogue" ? "proche de : " : "aussi dans cette saisie : ") + p.avec.join(" / ")).join("\n\n");
+      if(!confirm((proches.length > 1 ? "Doublons possibles :" : "Doublon possible :") + "\n\n" + liste +
+                  "\n\nContinuer l'enregistrement ?\n(Annuler pour revenir à la saisie et corriger.)")) return;
+      for(const p of proches){
+        if(confirm("« " + titles[p.i] + " »\n\nC'est un second exemplaire ?\n\n" +
+                   "OK : il est enregistré en réserve, il ne tourne pas en même temps que l'autre.\n" +
+                   "Annuler : il est enregistré normalement.")) enReserve.add(p.i);
+      }
     }
 
     if(cards.some(c => c._photosBusy)){ toast("Photos en cours de préparation, patiente un instant."); return; }
@@ -2096,8 +2135,9 @@ function wireAddForms(n, lotInfo){
         createdAt: Date.now(), lastPublished:0, rotations:0, fresh:true,
         isbn: isbnNormalise(isbnRaw).value || isbnClean(isbnRaw),
         theme: c.querySelector(".nTheme").value.trim(),
-        priority:0, status:"stock", soldPrice:0, soldAt:0, photoCount:k
+        priority:0, status: enReserve.has(i) ? "reserve" : "stock", soldPrice:0, soldAt:0, photoCount:k
       };
+      if(enReserve.has(i)) nb.fresh = false;
       await dbPut("books", nb);
       added.push(nb);
       btn.textContent = "Enregistrement… " + (i+1) + " / " + cards.length;
