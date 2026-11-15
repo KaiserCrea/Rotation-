@@ -80,6 +80,11 @@ input.msgT{font-family:var(--serif); font-size:18px; color:var(--text)}
 .ph button{position:absolute; top:2px; right:2px; width:22px; height:22px; padding:0;
     border:0; border-radius:50%; background:rgba(20,24,29,.82); color:#E9E3D6;
     font-size:13px; line-height:22px; text-align:center; cursor:pointer}
+.phItem{display:flex; flex-direction:column; gap:4px; width:68px}
+.phMove{display:flex; gap:4px}
+.phMove button{flex:1; height:28px; padding:0; border:1px solid var(--line); border-radius:6px;
+    background:var(--surface2); color:var(--text); font-size:14px; cursor:pointer}
+.phMove button:disabled{opacity:.25; cursor:default}
 .btn.sm{padding:7px 11px; font-size:13.5px}
 .btn.block{width:100%; display:block; text-align:center}
 .btn[disabled]{opacity:.45}
@@ -476,6 +481,7 @@ const lot = new Set();
 /* La sélection du Catalogue est gardée sur le téléphone : elle survit à la
    fermeture de l'appli et ne s'efface qu'avec Annuler, la vente ou la priorité. */
 const LOT_KEY = "rot.selection";
+try { if("scrollRestoration" in history) history.scrollRestoration = "manual"; } catch(e){}
 let lotPret = false;          // pas d'écriture avant la relecture au démarrage
 function lotSave(){
   if(!lotPret) return;
@@ -768,6 +774,7 @@ async function proposeJumeaux(vendus){
         await dbPut("books", r);
         toast("Second exemplaire remis en circulation");
       }
+      break;   // un seul exemplaire proposé par livre vendu, même s'il y en a plusieurs en réserve
     }
   }
 }
@@ -1340,6 +1347,15 @@ function openSheet(){
   document.body.style.overflow = "hidden";
   window.scrollTo(0,0);
   pushState();
+  sheetTop();
+}
+/* Chrome sur Android peut faire défiler la fiche juste après son ouverture :
+   on la remet en haut une fois l'affichage fait, puis encore un peu plus tard. */
+function sheetTop(){
+  const haut = () => { const s = $("#sheet"); if(s) s.scrollTop = 0; window.scrollTo(0,0); };
+  try { if(document.activeElement && document.activeElement !== document.body) document.activeElement.blur(); } catch(e){}
+  haut();
+  requestAnimationFrame(() => { haut(); setTimeout(haut, 80); setTimeout(haut, 300); });
 }
 
 /* ---------- fiche de préparation, depuis Aujourd'hui ---------- */
@@ -1455,6 +1471,7 @@ function openManage(id){
         '<div id="phHost" class="phGrid"></div>' +
         '<input type="file" id="phAdd" accept="image/*" multiple>' +
         '<p class="hint" style="margin-top:6px">Les nouvelles photos se placent à la suite. ' +
+        'Les flèches avancent ou reculent une photo d\'une place : la première sert de couverture. ' +
         'La croix en supprime une et renumérote les autres.</p></div>' +
       '<div class="field"><label class="f">Mots-clés propres à ce livre</label>' +
         '<div id="kwHost">' + kwPickerHTML(b.tags || []) + '</div></div>' +
@@ -1469,6 +1486,19 @@ function openManage(id){
         '<p class="hint" style="margin-top:8px">Le livre passe dans l\'onglet En cours. ' +
           'Rien n\'entre au bilan tant que le paiement n\'est pas confirmé.</p>' +
         '<button class="btn main block" id="sellGo" style="margin-top:10px">Passer en transaction</button>' +
+      '</div>' +
+      '<button class="btn block" id="dupBtn" style="margin-bottom:10px">Dupliquer (exemplaires identiques)</button>' +
+      '<div id="dupBox" style="display:none" class="card">' +
+        '<div class="two">' +
+          '<div class="field" style="margin:0"><label class="f" for="dupN">Exemplaires en tout</label>' +
+            '<input id="dupN" inputmode="numeric" placeholder="ex. 11"></div>' +
+          '<div class="field" style="margin:0"><label class="f" for="dupTotal">Prix payé pour l\'ensemble</label>' +
+            '<input id="dupTotal" inputmode="decimal" value="' + esc(b.buyPrice || 0) + '"></div>' +
+        '</div>' +
+        '<p class="hint" id="dupHint" style="margin-top:8px">Compte celui-ci dans le total. Les copies reprennent la fiche à l\'identique, ' +
+          'photos comprises, et partent en réserve : un seul exemplaire tourne à la fois. ' +
+          'Le prix payé est partagé à parts égales entre tous les exemplaires. Le bilan n\'est pas modifié.</p>' +
+        '<button class="btn main block" id="dupGo" style="margin-top:10px">Créer les copies</button>' +
       '</div>' +
       '<button class="btn block" id="resv" style="margin-bottom:10px">' +
         (b.status === "reserve" ? "Remettre en circulation" : "Mettre en réserve") + '</button>' +
@@ -1497,8 +1527,12 @@ function openManage(id){
       if(!rec) continue;
       const u = URL.createObjectURL(rec.blob);
       phURLs.push(u);
-      html += '<div class="ph"><img src="' + u + '" alt="photo ' + (i+1) + '">' +
-        '<button type="button" data-ph="' + i + '" aria-label="Supprimer cette photo">✕</button></div>';
+      html += '<div class="phItem"><div class="ph"><img src="' + u + '" alt="photo ' + (i+1) + '">' +
+        '<button type="button" data-ph="' + i + '" aria-label="Supprimer cette photo">✕</button></div>' +
+        '<div class="phMove">' +
+          '<button type="button" data-mv="' + i + '" data-dir="-1" aria-label="Avancer d\'une place"' + (i === 0 ? ' disabled' : '') + '>◀</button>' +
+          '<button type="button" data-mv="' + i + '" data-dir="1" aria-label="Reculer d\'une place"' + (i === n - 1 ? ' disabled' : '') + '>▶</button>' +
+        '</div></div>';
     }
     host.innerHTML = html;
     host.querySelectorAll("[data-ph]").forEach(btn => {
@@ -1515,6 +1549,18 @@ function openManage(id){
         await dbPut("books", b);
         await renderPhotos();
         toast("Photo supprimée");
+      };
+    });
+    host.querySelectorAll("[data-mv]").forEach(btn => {
+      btn.onclick = async () => {
+        const i = Number(btn.dataset.mv), j = i + Number(btn.dataset.dir);
+        const n = b.photoCount || 0;
+        if(j < 0 || j >= n) return;
+        const a = await dbGet("photos", b.id + "_" + i), c = await dbGet("photos", b.id + "_" + j);
+        if(!a || !c) return;
+        await dbPut("photos", {key: b.id + "_" + i, blob: c.blob});
+        await dbPut("photos", {key: b.id + "_" + j, blob: a.blob});
+        await renderPhotos();
       };
     });
   }
@@ -1575,6 +1621,49 @@ function openManage(id){
     closeSheet(); toast("En transaction — voir l'onglet En cours");
     await proposeJumeaux([b]);
     render();
+  };
+  $("#dupBtn").onclick = () => {
+    const box = $("#dupBox");
+    box.style.display = box.style.display === "none" ? "block" : "none";
+  };
+  const dupUpd = () => {
+    const n = parseInt($("#dupN").value, 10), t = num($("#dupTotal").value);
+    const go = $("#dupGo");
+    if(n >= 2 && n <= 100){
+      go.textContent = "Créer " + (n - 1) + (n - 1 > 1 ? " copies" : " copie") + " · " + eur(t / n) + " l'exemplaire";
+      go.disabled = false;
+    } else { go.textContent = "Créer les copies"; go.disabled = !(n >= 2 && n <= 100); }
+  };
+  $("#dupN").oninput = dupUpd; $("#dupTotal").oninput = dupUpd; dupUpd();
+  $("#dupGo").onclick = async () => {
+    const n = parseInt($("#dupN").value, 10), total = num($("#dupTotal").value);
+    if(!(n >= 2 && n <= 100)){ toast("Indique le nombre d'exemplaires en tout (2 ou plus)."); return; }
+    if(!confirm("Créer " + (n - 1) + (n - 1 > 1 ? " copies" : " copie") + " de « " + b.title + " » en réserve ?\n\n" +
+                "Prix d'achat : " + eur(total / n) + " par exemplaire (" + eur(total) + " pour les " + n + ").")) return;
+    const go = $("#dupGo"); go.disabled = true;
+    await saveFields();
+    const unit = Math.floor(total / n * 100) / 100;
+    b.buyPrice = Math.round((total - unit * (n - 1)) * 100) / 100;   // les centimes restants vont sur celui-ci
+    await dbPut("books", b);
+    const nbPh = b.photoCount || 0, blobs = [];
+    for(let i = 0; i < nbPh; i++){ const r = await dbGet("photos", b.id + "_" + i); if(r) blobs.push(r.blob); }
+    const copies = [];
+    for(let k = 1; k < n; k++){
+      go.textContent = "Création… " + k + " / " + (n - 1);
+      const id = uid("d");
+      const c = Object.assign({}, b, {
+        id:id, buyPrice:unit, status:"reserve", priority:0, lastPublished:0, rotations:0, fresh:false,
+        createdAt: Date.now(), soldPrice:0, soldAt:0, photoCount:blobs.length,
+        tags: (b.tags || []).slice()
+      });
+      delete c.saleGroup; delete c._paths;
+      for(let i = 0; i < blobs.length; i++) await dbPut("photos", {key: id + "_" + i, blob: blobs[i]});
+      await dbPut("books", c);
+      copies.push(c);
+    }
+    books = books.concat(copies);
+    closeSheet();
+    toast((n - 1) + (n - 1 > 1 ? " copies créées" : " copie créée") + " en réserve");
   };
   $("#resv").onclick = async () => {
     b.status = (b.status === "reserve") ? "stock" : "reserve";
@@ -1699,6 +1788,7 @@ function openAdd(){
       if(confirm("Une saisie de livre non terminée a été retrouvée" + (t ? " :\n« " + t + " »" : "") +
                  ".\n\nLa reprendre ?")) draftApply(d);
       else draftClear("livre");
+      sheetTop();
     }, 50);
   }
 }
@@ -2627,6 +2717,12 @@ $("#lotGo").onclick = async () => {
   const changed = [];
   queue().forEach(b => { if(lot.has(b.id)){ b.priority = rank++; changed.push(b); } });
   await dbPutMany("books", changed);
+  // un livre écarté aujourd'hui avec la croix revient tout de suite s'il passe en priorité
+  if(daily.day === dayKey() && Array.isArray(daily.skip) && daily.skip.length){
+    const ids = new Set(changed.map(b => b.id));
+    const reste = daily.skip.filter(id => !ids.has(id));
+    if(reste.length !== daily.skip.length){ daily.skip = reste; await dbPut("meta", {k:"daily", v:daily}); }
+  }
   lot.clear(); await setExtra(0);
   toast(changed.length + " livres passés en tête de file");
   render(); showTab("today");
