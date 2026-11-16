@@ -223,6 +223,7 @@ progress{width:100%; height:8px}
       <button class="btn sm grow" id="lotGo">Passer en priorité</button>
       <button class="btn sm main grow" id="lotSell">Vendre la sélection</button>
     </div>
+    <button class="btn sm block" id="lotAfter" style="margin-top:8px">Placer juste après…</button>
   </div>
   <p class="hint" id="catCount" style="margin-bottom:4px"></p>
   <ul class="q" id="catList"></ul>
@@ -820,19 +821,47 @@ function dormantSince(b){
   const mois = (Date.now() - b.createdAt) / (1000 * 60 * 60 * 24 * 30.44);
   return mois >= n ? Math.floor(mois) : 0;
 }
+/* Place d'un livre dans la file (hors priorité) :
+   groupe 0 = saisis à la main jamais publiés, 1 = autres jamais publiés, 2 = déjà publiés.
+   « Placer juste après… » range un livre derrière un autre en lui donnant une clé (b.cle),
+   effacée dès qu'il est publié ou repoussé. */
+function cleFile(b){
+  if(b.cle && typeof b.cle.g === "number" && typeof b.cle.t === "number") return b.cle;
+  const g = (!b.lastPublished && b.fresh) ? 0 : (!b.lastPublished ? 1 : 2);
+  return {g:g, t: g === 2 ? b.lastPublished : (b.createdAt || 0)};
+}
 function queue(){
   return inStock().slice().sort((a,b) => {
-    if(a.priority !== b.priority) return (b.priority?1:0) - (a.priority?1:0);
-    if(a.priority && b.priority) return a.priority - b.priority;
-    const fa = (!a.lastPublished && a.fresh) ? 0 : 1;
-    const fb = (!b.lastPublished && b.fresh) ? 0 : 1;
-    if(fa !== fb) return fa - fb;                     // saisies à la main d'abord
-    if(!fa && !fb) return (a.createdAt || 0) - (b.createdAt || 0);
-    const na = a.lastPublished ? 1 : 0, nb = b.lastPublished ? 1 : 0;
-    if(na !== nb) return na - nb;                     // puis les jamais publiés
-    if(!na && !nb) return (a.createdAt || 0) - (b.createdAt || 0);
-    return a.lastPublished - b.lastPublished;
+    const pa = a.priority ? 1 : 0, pb = b.priority ? 1 : 0;
+    if(pa !== pb) return pb - pa;                     // les livres en priorité d'abord
+    if(pa && pb) return a.priority - b.priority;      // dans leur rang
+    const ka = cleFile(a), kb = cleFile(b);
+    if(ka.g !== kb.g) return ka.g - kb.g;
+    return ka.t - kb.t;
   });
+}
+/* Range les livres « ids » juste derrière « ref », dans l'ordre qu'ils avaient dans la file. */
+async function placerApres(ref, ids){
+  const q = queue();
+  const bouge = q.filter(b => ids.has(b.id) && b.id !== ref.id);
+  if(!bouge.length) return 0;
+  const reste = q.filter(b => !ids.has(b.id) || b.id === ref.id);
+  const suivant = reste[reste.indexOf(ref) + 1];
+  const n = bouge.length;
+  if(ref.priority){
+    const p0 = ref.priority;
+    const p1 = (suivant && suivant.priority) ? suivant.priority : p0 + 1;
+    const pas = (p1 - p0) / (n + 1);
+    bouge.forEach((b, k) => { b.priority = p0 + pas * (k + 1); delete b.cle; });
+  } else {
+    const k0 = cleFile(ref);
+    let t1 = k0.t + 1000;
+    if(suivant && !suivant.priority){ const ks = cleFile(suivant); if(ks.g === k0.g) t1 = ks.t; }
+    const pas = (t1 - k0.t) / (n + 1);
+    bouge.forEach((b, k) => { b.priority = 0; b.cle = {g:k0.g, t:k0.t + pas * (k + 1)}; });
+  }
+  await dbPutMany("books", bouge);
+  return n;
 }
 let daily = {day:"", n:0, skip:[], extra:0};
 function publishedToday(){
@@ -1450,7 +1479,7 @@ function openBook(id){
     await saveFields();
     b.lastPublished = Date.now();
     b.rotations = (b.rotations || 0) + 1;
-    b.priority = 0;
+    b.priority = 0; delete b.cle;
     await dbPut("books", b);
     await countPublish();
     closeSheet(); toast("Publié");
@@ -1458,7 +1487,7 @@ function openBook(id){
   $("#pushBack").onclick = async () => {
     await saveFields();
     b.lastPublished = Date.now();
-    b.priority = 0;
+    b.priority = 0; delete b.cle;
     await dbPut("books", b);
     closeSheet(); toast("Repoussé en fin de file");
   };
@@ -2766,6 +2795,46 @@ $("#lotGo").onclick = async () => {
   lot.clear(); await setExtra(0);
   toast(changed.length + " livres passés en tête de file");
   render(); showTab("today");
+};
+
+/* « Placer juste après… » : choisir le livre derrière lequel ranger la sélection */
+$("#lotAfter").onclick = () => {
+  const sel = new Set(lot);
+  const nSel = inStock().filter(b => sel.has(b.id)).length;
+  if(!nSel){ toast("Aucun livre de la sélection n'est dans la file."); return; }
+  $("#sheetTick").textContent = "Ranger dans la file";
+  $("#sheetBody").innerHTML =
+    '<h2 class="title" style="font-size:22px; margin-bottom:8px">Placer juste après…</h2>' +
+    '<p class="hint" style="margin-bottom:12px">' + (nSel > 1 ? 'Les ' + nSel + ' livres sélectionnés viendront' : 'Le livre sélectionné viendra') +
+      ' se ranger juste derrière le livre que tu choisis, sans passer en priorité.</p>' +
+    '<input id="plSearch" placeholder="Chercher un titre ou un auteur" autocomplete="off" style="margin-bottom:10px">' +
+    '<ul class="q" id="plList"></ul>';
+  openSheet();
+  const dessiner = () => {
+    const f = normTitre($("#plSearch").value);
+    const q = queue();
+    const rang = new Map(q.map((b, i) => [b.id, i + 1]));
+    const hits = q.filter(b => !sel.has(b.id) && (!f || normTitre(b.title).indexOf(f) >= 0)).slice(0, 40);
+    $("#plList").innerHTML = hits.length ? hits.map(b =>
+      '<li style="cursor:pointer; padding:10px 0; border-bottom:1px solid var(--line)" data-pl="' + esc(b.id) + '">' +
+        '<span class="hint" style="margin-right:8px">' + rang.get(b.id) + '</span>' + esc(b.title) + '</li>').join("")
+      : '<li class="hint" style="padding:10px 0">Aucun titre trouvé.</li>';
+    $$("#plList [data-pl]").forEach(li => {
+      li.onclick = async () => {
+        const ref = books.find(x => x.id === li.dataset.pl);
+        if(!ref) return;
+        if(!confirm("Ranger " + (nSel > 1 ? "les " + nSel + " livres sélectionnés" : "le livre sélectionné") +
+                    " juste après :\n\n« " + ref.title + " » ?")) return;
+        const n = await placerApres(ref, sel);
+        lot.clear();
+        closeSheet();
+        render();
+        toast(n + (n > 1 ? " livres rangés" : " livre rangé") + " après « " + ref.title + " »");
+      };
+    });
+  };
+  $("#plSearch").oninput = dessiner;
+  dessiner();
 };
 
 /* Sélection en cours : prix cumulés et liste dépliante des titres cochés */
